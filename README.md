@@ -72,11 +72,36 @@ claude mcp add sidebar --scope user -- sh -c 'sidebar mcp --as "${SIDEBAR_AGENT_
 
 ## Adding sidebar to Codex
 
-Codex uses an MCP config too. Add a server entry pointing at the same binary;
-the exact spelling depends on your Codex version. Example:
-
 ```bash
 codex mcp add sidebar -- sidebar mcp --as codex
+```
+
+⚠️ Codex's default approval policy blocks MCP tool calls until the user
+confirms each one (`user cancelled MCP tool call`). For non-interactive
+use (e.g. `codex exec`) pass `--dangerously-bypass-approvals-and-sandbox`,
+or configure `~/.codex/config.toml` to auto-approve MCP tools. Interactive
+sessions surface a confirmation prompt instead.
+
+## Validated workflow (Claude Code + Codex, both calling sidebar)
+
+This is the demo, all in one terminal as a smoke test:
+
+```bash
+# 1. daemon + tail in two backgrounds
+sidebar serve &
+sidebar tail &
+
+# 2. wire both agents (one-time)
+claude mcp add sidebar --scope user -- "$(which sidebar)" mcp --as claude-code
+codex mcp add sidebar -- "$(which sidebar)" mcp --as codex
+
+# 3. exercise them via subshell
+claude -p 'use sidebar to send "hi" to #general'
+codex exec --dangerously-bypass-approvals-and-sandbox 'use sidebar to send "hi back" to #general'
+
+# 4. watch tail — both messages appear:
+#    claude-code → #general: hi
+#    codex → #general: hi back
 ```
 
 ## Wakeup pattern
