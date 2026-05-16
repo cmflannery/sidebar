@@ -3,6 +3,7 @@
 //! Each test gets its own SIDEBAR_HOME tmpdir; the daemon is spawned as a
 //! subprocess and torn down at the end of the test.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -144,4 +145,59 @@ fn pause_is_still_stubbed_and_errors_explicitly() {
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("not yet implemented"), "stderr was: {err}");
+}
+
+/// Regression: the MCP stub must start cleanly even when the daemon is down.
+/// Otherwise Claude Code reports "-32000" the moment sidebar is configured
+/// before `sidebar serve` is running. Tool calls should return a friendly
+/// error rather than the stub dying.
+#[test]
+fn mcp_stub_survives_missing_daemon() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let home = std::env::temp_dir().join(format!("sidebar-test-{pid}-{id}-nomac"));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+
+    // No daemon. Pipe an MCP handshake into `sidebar mcp` and expect it to
+    // respond to initialize + tools/list and a tools/call that errors cleanly.
+    let mut child = Command::new(sidebar_bin())
+        .args(["mcp", "--as", "stranded"])
+        .env("SIDEBAR_HOME", &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp");
+    let stdin = child.stdin.as_mut().unwrap();
+    let handshake = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"participants","arguments":{}}}"#,
+        "\n",
+    );
+    Write::write_all(stdin, handshake.as_bytes()).unwrap();
+    drop(child.stdin.take());
+
+    let out = child.wait_with_output().expect("wait mcp");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // Must respond to initialize without crashing.
+    assert!(
+        stdout.contains("\"id\":1") && stdout.contains("serverInfo"),
+        "no initialize response: stdout=\n{stdout}"
+    );
+    // Must respond to the tool call (with an error payload), not die mid-handshake.
+    assert!(
+        stdout.contains("\"id\":2"),
+        "no tools/call response (stub died?): stdout=\n{stdout}"
+    );
+    assert!(
+        stdout.contains("daemon not reachable"),
+        "expected friendly daemon-down error, got:\n{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
 }

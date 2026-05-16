@@ -19,7 +19,10 @@ use crate::types::Recipient;
 #[derive(Clone)]
 struct SidebarMcp {
     agent_name: String,
-    client: Arc<Mutex<Client>>,
+    /// Lazy connection. `None` means "not yet connected" or "previously dropped
+    /// after a failure". Each tool call re-establishes if needed; this lets
+    /// the stub survive a daemon restart instead of dying on stdin EOF.
+    client: Arc<Mutex<Option<Client>>>,
 }
 
 // ---- tool arg types ----
@@ -114,7 +117,20 @@ impl SidebarMcp {
     /// Send an Op to the daemon over the persistent socket; return a JSON
     /// string the caller can parse, or a human-readable error.
     async fn call(&self, op: Op) -> String {
-        let mut client = self.client.lock().await;
+        let mut guard = self.client.lock().await;
+        if guard.is_none() {
+            match Client::connect_mcp(&self.agent_name, env!("CARGO_PKG_VERSION")).await {
+                Ok(c) => *guard = Some(c),
+                Err(e) => {
+                    return serde_json::json!({
+                        "ok": false,
+                        "error": format!("sidebar daemon not reachable: {e}. Start it with `sidebar serve`.")
+                    })
+                    .to_string();
+                }
+            }
+        }
+        let client = guard.as_mut().expect("connected above");
         match client.request(op).await {
             Ok(resp) => {
                 if resp.ok {
@@ -145,7 +161,11 @@ impl SidebarMcp {
                     .to_string()
                 }
             }
-            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }).to_string(),
+            Err(e) => {
+                // Connection probably broken — drop it so the next call retries.
+                *guard = None;
+                serde_json::json!({ "ok": false, "error": e.to_string() }).to_string()
+            }
         }
     }
 }
@@ -183,7 +203,20 @@ fn parse_intent(s: &str) -> Option<crate::types::Intent> {
 }
 
 pub async fn serve(agent_name: String) -> Result<()> {
-    let client = Client::connect_mcp(&agent_name, env!("CARGO_PKG_VERSION")).await?;
+    // Best-effort eager connect — if the daemon's up, we register a session
+    // immediately so the agent appears in `sidebar participants`. If it's
+    // down, we still start the MCP stub; tool calls will retry the connect
+    // and return a clean error to Claude/Codex if the daemon stays down.
+    let client = match Client::connect_mcp(&agent_name, env!("CARGO_PKG_VERSION")).await {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not reach sidebar daemon on startup; will retry per tool call"
+            );
+            None
+        }
+    };
     let server = SidebarMcp {
         agent_name,
         client: Arc::new(Mutex::new(client)),
