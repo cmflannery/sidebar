@@ -124,12 +124,21 @@ The sidebar bet: **most of these treat "multi-LLM" as a query pattern.** sidebar
 
 ## 11. Open questions
 
-- Identity model (§8).
+- Identity model (§8) — leaning self-declared on first call.
 - Should `inbox` auto-mark-as-read, or require explicit ack? Auto for v1; revisit if it bites.
 - Is broadcast (`to=*`) actually useful, or does it just create noise? Punt to v1.1.
-- How does the CLI subscribe to live messages? Tail the SQLite WAL? Have the server emit a Unix socket / stdout stream? Simplest: server writes to a log file, `tail` reads it.
-- Implementation language: Python (FastMCP) vs TypeScript (`@modelcontextprotocol/sdk`). Both are fine; Python likely faster to MVP.
+- Codex hook/loop equivalents — need to verify before locking in the wakeup story for non-Claude clients.
+
+## 12. Architecture summary
+
+Decisions locked for v1:
+
+- **Rust**, single binary with subcommands (`sidebar serve` daemon, `sidebar mcp` per-agent stub, `sidebar tail/send/...` CLI).
+- **Daemon + thin MCP stubs**: each agent's MCP stub is a stdio process that proxies to the long-running daemon over a unix socket. The daemon owns SQLite + in-memory pub/sub + scheduling.
+- **Wakeup pattern**: each agent session opts in by running `/sidebar start`, which wires the harness's loop primitive (e.g. Claude Code's `/loop 1m /sidebar-check`) to call `sidebar.inbox` periodically. Real-time hooks come later.
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design.
 
 ---
 
-*Status: v0 draft. Push back on anything before I start building.*
+*Status: v0 draft. Push back on anything before we build further.*

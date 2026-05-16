@@ -1,0 +1,24 @@
+[package]
+name = "sidebar"
+version = "0.1.0"
+edition = "2024"
+description = "Local MCP server for inter-agent messaging and scheduling."
+license = "MIT"
+repository = "https://github.com/cmflannery/sidebar"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+directories = "5"
+
+# rmcp (Rust MCP SDK) — added when we implement `sidebar mcp`. Verify
+# stdio-server + server-initiated notifications shape before committing.
+# rmcp = "0.1"
