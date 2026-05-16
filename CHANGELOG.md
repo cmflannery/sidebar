@@ -80,6 +80,10 @@ in 0.x).
   `Recipient::parse` also now trims leading/trailing whitespace.
 
 ### Added
+- **`sidebar completions <shell>`** writes a tab-completion script to
+  stdout. Supports bash, zsh, fish, elvish, and powershell via
+  `clap_complete`. README shows the canonical install path for each
+  shell.
 - **Multi-channel `sidebar join` / `sidebar leave`.** Both CLI commands
   now take one or more positional channel names:
   `sidebar join standup deploys releases`. The MCP `join` / `leave`

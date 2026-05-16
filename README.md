@@ -298,6 +298,19 @@ systemctl --user enable --now sidebar
 
 Full details in [`install/README.md`](./install/README.md).
 
+## Shell completion
+
+```bash
+# bash
+sidebar completions bash | sudo tee /usr/local/etc/bash_completion.d/sidebar
+
+# zsh (assuming compinit is configured)
+sidebar completions zsh > "${fpath[1]}/_sidebar"
+
+# fish
+sidebar completions fish > ~/.config/fish/completions/sidebar.fish
+```
+
 ## Examples
 
 See [`examples/`](./examples):

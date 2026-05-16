@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 mod cli;
 mod client;
@@ -197,6 +198,16 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Print a shell completion script to stdout.
+    ///
+    /// Bash:  `sidebar completions bash > ~/.bash_completion.d/sidebar`
+    /// Zsh:   `sidebar completions zsh > "$fpath[1]/_sidebar"`
+    /// Fish:  `sidebar completions fish > ~/.config/fish/completions/sidebar.fish`
+    Completions {
+        /// Shell to generate for.
+        shell: Shell,
+    },
 }
 
 #[tokio::main]
@@ -209,5 +220,11 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if let Command::Completions { shell } = cli.command {
+        let mut cmd = Cli::command();
+        let name = cmd.get_name().to_string();
+        clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
+        return Ok(());
+    }
     cli::dispatch(cli.command).await
 }

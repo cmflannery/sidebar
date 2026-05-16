@@ -284,6 +284,27 @@ fn grep_rejects_excessive_query_length_and_limit() {
 }
 
 #[test]
+fn completions_emit_real_scripts() {
+    // No sandbox needed — `completions` doesn't touch the daemon or DB.
+    for (shell, marker) in [
+        ("bash", "_sidebar()"),
+        ("zsh", "#compdef sidebar"),
+        ("fish", "complete -c sidebar"),
+    ] {
+        let out = Command::new(sidebar_bin())
+            .args(["completions", shell])
+            .output()
+            .expect("run completions");
+        assert!(out.status.success(), "{shell} completions failed");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(marker),
+            "{shell} script missing expected marker {marker:?}: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn inspect_shows_per_recipient_delivery_state() {
     let sb = Sandbox::new();
     sb.stdout(&["send", "@alice", "create alice"]);
