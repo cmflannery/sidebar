@@ -8,17 +8,23 @@ mod daemon;
 mod mcp;
 mod paths;
 mod proto;
+mod repl;
 mod types;
 
 #[derive(Parser)]
 #[command(
     name = "sidebar",
     version,
-    about = "Local MCP server for inter-agent messaging"
+    about = "Local MCP server for inter-agent messaging. Bare `sidebar` drops into the interactive REPL; auto-starts a daemon if none is running."
 )]
 struct Cli {
+    /// Identity to speak as in the interactive REPL. Ignored for all
+    /// other subcommands (they take `--as` per-command).
+    #[arg(long = "as", global = false, default_value = "master")]
+    as_name: String,
+
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -220,11 +226,14 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    if let Command::Completions { shell } = cli.command {
+    let Some(command) = cli.command else {
+        return repl::run(cli.as_name).await;
+    };
+    if let Command::Completions { shell } = command {
         let mut cmd = Cli::command();
         let name = cmd.get_name().to_string();
         clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
         return Ok(());
     }
-    cli::dispatch(cli.command).await
+    cli::dispatch(command).await
 }
