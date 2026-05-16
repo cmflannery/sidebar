@@ -8,6 +8,10 @@ in 0.x).
 ## [Unreleased]
 
 ### Added
+- **`sidebar channels [--details] [--json]`** — finally a CLI counterpart
+  to the existing MCP `channels` tool. Plain mode lists channel names;
+  `--details` adds a table with member counts and last-activity time.
+  New wire op `Op::ChannelsDetailed`.
 - **`sidebar inbox --mentions-only`** + `mcp__sidebar__inbox({mentions_only: true})`.
   Returns only messages explicitly addressed to the calling agent: DMs to
   them, or channel/broadcast messages where their name appears as an

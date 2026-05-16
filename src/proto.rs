@@ -81,6 +81,8 @@ pub enum Op {
         include_stale: bool,
     },
     Channels,
+    /// Channels with member_count + last_message_at, for `sidebar channels --details`.
+    ChannelsDetailed,
     /// Subscribe the calling agent to a channel (without leading `#`).
     /// Creates the channel if it doesn't exist.
     Join {
@@ -134,11 +136,24 @@ pub struct Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ResponseData {
-    SendOk { message_id: i64 },
-    Messages { messages: Vec<Message> },
-    Agents { agents: Vec<String> },
-    AgentsDetailed { agents_detailed: Vec<AgentDetails> },
-    Channels { channels: Vec<String> },
+    SendOk {
+        message_id: i64,
+    },
+    Messages {
+        messages: Vec<Message>,
+    },
+    Agents {
+        agents: Vec<String>,
+    },
+    AgentsDetailed {
+        agents_detailed: Vec<AgentDetails>,
+    },
+    Channels {
+        channels: Vec<String>,
+    },
+    ChannelsDetailed {
+        channels_detailed: Vec<ChannelDetails>,
+    },
     Status(StatusInfo),
 }
 
@@ -147,6 +162,14 @@ pub struct AgentDetails {
     pub name: String,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelDetails {
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub member_count: i64,
+    pub last_message_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

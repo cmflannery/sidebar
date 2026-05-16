@@ -31,6 +31,7 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Say { body } => say(body).await,
         Command::Participants { json } => participants(json).await,
         Command::Agents { all, json } => agents(all, json).await,
+        Command::Channels { details, json } => channels(details, json).await,
         Command::History {
             channel,
             with,
@@ -85,6 +86,59 @@ async fn status(json: bool) -> Result<()> {
     println!("scheduled:   {} pending", s.pending_scheduled);
     println!("socket:      {}", s.socket_path);
     println!("db:          {}", s.db_path);
+    Ok(())
+}
+
+async fn channels(details: bool, json: bool) -> Result<()> {
+    let mut client = Client::connect_as("master").await?;
+    if details {
+        let resp = client.request(Op::ChannelsDetailed).await?;
+        if !resp.ok {
+            anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+        }
+        let Some(ResponseData::ChannelsDetailed { channels_detailed }) = resp.data else {
+            anyhow::bail!("unexpected response: {resp:?}");
+        };
+        if json {
+            println!("{}", serde_json::to_string(&channels_detailed)?);
+            return Ok(());
+        }
+        if channels_detailed.is_empty() {
+            println!("(no channels)");
+            return Ok(());
+        }
+        let name_w = channels_detailed
+            .iter()
+            .map(|c| c.name.len() + 1) // +1 for `#`
+            .max()
+            .unwrap_or(8);
+        let now = chrono::Utc::now();
+        println!("{:<name_w$}  members  last activity", "CHANNEL");
+        for c in channels_detailed {
+            let display = format!("#{}", c.name);
+            let last = c.last_message_at.map_or_else(
+                || "—".to_string(),
+                |t| format_relative(now.signed_duration_since(t)),
+            );
+            println!("{display:<name_w$}  {:>7}  {last}", c.member_count);
+        }
+        return Ok(());
+    }
+
+    let resp = client.request(Op::Channels).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    let Some(ResponseData::Channels { channels }) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    if json {
+        println!("{}", serde_json::to_string(&channels)?);
+    } else {
+        for c in channels {
+            println!("#{c}");
+        }
+    }
     Ok(())
 }
 

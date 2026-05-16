@@ -154,6 +154,36 @@ impl Store {
         .await?
     }
 
+    /// List channels with member counts + last activity timestamp.
+    pub async fn list_channels_detailed(&self) -> Result<Vec<crate::proto::ChannelDetails>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<crate::proto::ChannelDetails>> {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn.prepare(
+                "SELECT
+                   c.name,
+                   c.created_at,
+                   (SELECT COUNT(*) FROM memberships m WHERE m.channel_id = c.id) AS member_count,
+                   (SELECT MAX(created_at) FROM messages WHERE to_channel = c.id) AS last_message_at
+                 FROM channels c
+                 ORDER BY c.name",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    let last_raw: Option<String> = r.get(3)?;
+                    Ok(crate::proto::ChannelDetails {
+                        name: r.get(0)?,
+                        created_at: parse_ts(&r.get::<_, String>(1)?),
+                        member_count: r.get(2)?,
+                        last_message_at: last_raw.as_deref().map(parse_ts),
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await?
+    }
+
     /// List channel names.
     pub async fn list_channels(&self) -> Result<Vec<String>> {
         let conn = self.conn.clone();

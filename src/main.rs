@@ -86,6 +86,14 @@ pub enum Command {
         json: bool,
     },
 
+    /// List channels. With --details, show member counts and last activity.
+    Channels {
+        #[arg(long)]
+        details: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Table view of agents with first/last-seen times.
     Agents {
         /// Include agents not seen in the last 7 days.

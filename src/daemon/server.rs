@@ -358,6 +358,11 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
             .list_channels()
             .await
             .map(|channels| ResponseData::Channels { channels }),
+        Op::ChannelsDetailed => daemon
+            .store
+            .list_channels_detailed()
+            .await
+            .map(|channels_detailed| ResponseData::ChannelsDetailed { channels_detailed }),
         Op::Send {
             to,
             body,

@@ -222,6 +222,39 @@ fn inbox_mentions_only_filters_to_addressed_messages() {
 }
 
 #[test]
+fn channels_details_shows_member_count_and_activity() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@alice", "create alice"]);
+    sb.stdout(&["join", "deploys", "--as", "alice"]);
+    sb.stdout(&["send", "#deploys", "first deploy log"]);
+
+    // Plain channels: just names with leading `#`.
+    let names = sb.stdout(&["channels"]);
+    assert!(names.contains("#general"));
+    assert!(names.contains("#deploys"));
+
+    // --details: shows headers, member counts, recent activity for #deploys.
+    let det = sb.stdout(&["channels", "--details"]);
+    assert!(det.contains("CHANNEL"), "missing header: {det}");
+    assert!(det.contains("members"), "missing members col: {det}");
+    assert!(det.contains("#deploys"), "missing channel: {det}");
+    // alice is a member; member_count for #deploys should be at least 1.
+    assert!(det.contains("just now") || det.contains("s ago"));
+
+    // --json: parseable array.
+    let json = sb.stdout(&["channels", "--details", "--json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let deploys = parsed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"].as_str() == Some("deploys"))
+        .expect("missing deploys entry");
+    assert!(deploys["member_count"].as_i64().unwrap() >= 1);
+    assert!(deploys["last_message_at"].is_string());
+}
+
+#[test]
 fn channel_mention_pings_nonmember() {
     let sb = Sandbox::new();
     // alice never joins #project but is mentioned in a message there.
