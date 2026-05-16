@@ -674,7 +674,12 @@ impl Store {
         .await?
     }
 
-    /// Delete read messages older than `retention_days`. Returns rows deleted.
+    /// Delete read messages older than `retention_days` and scheduled rows
+    /// that have already fired (status='delivered' or 'failed') and are
+    /// also older than the cutoff. Pending scheduled rows are left alone
+    /// — they're still waiting to fire.
+    /// Returns the number of message rows deleted (scheduled cleanup is
+    /// secondary and isn't surfaced in the count).
     pub async fn cleanup_old(&self, retention_days: i64) -> Result<usize> {
         let conn = self.conn.clone();
         let cutoff = Utc::now() - chrono::Duration::days(retention_days);
@@ -693,6 +698,14 @@ impl Store {
                     HAVING COUNT(d.read_at) = COUNT(d.message_id)
                   )
                 ",
+                params![cutoff_str],
+            )?;
+            // Scheduled rows that have already fired (or failed) and
+            // are older than retention are no longer interesting.
+            tx.execute(
+                "DELETE FROM scheduled
+                 WHERE status IN ('delivered', 'failed')
+                   AND deliver_at < ?1",
                 params![cutoff_str],
             )?;
             tx.commit()?;

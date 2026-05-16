@@ -294,6 +294,12 @@ const MAX_INBOX_WAIT_MS: u64 = 300_000; // 5 minutes
 /// human-grokkable.
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
+/// Maximum delay for a scheduled send. Anything beyond this is almost
+/// certainly a typo (year 9999) and would sit in the scheduled table
+/// past retention horizons. Past timestamps are NOT clamped — they
+/// just deliver on the next scheduler tick.
+const MAX_SCHEDULE_DELAY_SECONDS: i64 = 60 * 60 * 24 * 365; // 1 year
+
 async fn fetch_inbox_with_long_poll(
     daemon: &Daemon,
     agent_name: &str,
@@ -467,13 +473,26 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                     data: None,
                 };
             }
+            let now = chrono::Utc::now();
             let deliver_at = match when {
                 crate::proto::When::DelaySeconds { delay_seconds } => {
                     let secs = i64::try_from(delay_seconds).unwrap_or(i64::MAX);
-                    chrono::Utc::now() + chrono::Duration::seconds(secs)
+                    now + chrono::Duration::seconds(secs)
                 }
                 crate::proto::When::At { at } => at,
             };
+            let delay = (deliver_at - now).num_seconds();
+            if delay > MAX_SCHEDULE_DELAY_SECONDS {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!(
+                        "scheduled delivery is {} days in the future; max is 365",
+                        delay / 86_400
+                    )),
+                    data: None,
+                };
+            }
             daemon
                 .store
                 .schedule(agent_name, &to, &body, None, None, deliver_at)

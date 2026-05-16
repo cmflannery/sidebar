@@ -159,6 +159,36 @@ fn join_rejects_overlong_channel_name() {
 }
 
 #[test]
+fn schedule_rejects_unreasonable_future() {
+    let sb = Sandbox::new();
+    // Two years out (in seconds) — beyond the 365-day cap.
+    let two_years = (60 * 60 * 24 * 365 * 2).to_string();
+    let out = sb.run(&["schedule", "--to", "@bob", "--in", &two_years, "go fish"]);
+    assert!(!out.status.success(), "far-future schedule should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("max is 365"),
+        "expected delay-cap error, got: {err}"
+    );
+
+    // At-form way in the future also rejected.
+    let out = sb.run(&[
+        "schedule",
+        "--to",
+        "@bob",
+        "--at",
+        "9999-01-01T00:00:00Z",
+        "ping",
+    ]);
+    assert!(!out.status.success(), "year-9999 schedule should fail");
+
+    // 364 days is OK.
+    let ok = (60 * 60 * 24 * 364).to_string();
+    let out = sb.run(&["schedule", "--to", "@bob", "--in", &ok, "ok"]);
+    assert!(out.status.success(), "at-limit schedule should succeed");
+}
+
+#[test]
 fn send_rejects_oversized_body() {
     let sb = Sandbox::new();
     let huge = "x".repeat(64 * 1024 + 1);

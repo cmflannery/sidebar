@@ -14,6 +14,12 @@ in 0.x).
   with its `sha256` sum, and attaches them to the GitHub Release.
 
 ### Changed
+- **Cap on scheduled delivery delay**: 365 days from now. Beyond that,
+  reject with a clear "max is 365 days" message. Past timestamps still
+  fire on the next scheduler tick (intentional and tested).
+- **Retention cleanup now also prunes scheduled rows** with status
+  `delivered` or `failed` older than the retention cutoff. Pending
+  rows are left alone — they're still waiting to fire.
 - **Soft cap on message body size**: 64 KB. Larger sends are rejected
   with `body is N bytes; max is 65536`. Applies to both `Op::Send` and
   `Op::Schedule`. Bounds the daemon's memory footprint and keeps inbox
