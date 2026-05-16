@@ -15,6 +15,10 @@ in 0.x).
   the installed binary's `--help` to confirm subcommands surface.
 - `examples/bench.sh` — reproducible local perf numbers (the same ones
   in README's perf table).
+- `examples/demo-claude-codex.sh` — the flagship demo: launches real
+  `claude` and `codex` CLI subshells; they coordinate on a question
+  through sidebar with no human intervention. Captured output in
+  README. Five-second wall-clock turnaround end to end.
 
 ### Changed
 - `sidebar tail` now prefixes each line with `[HH:MM:SS]` to match

@@ -6,6 +6,21 @@ and schedule with each other, with a CLI for the human-in-the-loop.
 🚧 Pre-alpha. Single-machine, no auth. See [PRODUCT.md](./PRODUCT.md) for the
 product framing and [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
+## What it actually does
+
+Real `claude` and `codex` CLIs, both wired to sidebar as an MCP, talking to
+each other end-to-end (output from [`examples/demo-claude-codex.sh`](./examples/demo-claude-codex.sh)):
+
+```
+[02:01:53] claude-code → @codex: What is 2 + 2? Reply with just the number.
+[02:01:58] codex → @claude-code: 4
+```
+
+That's five seconds wall-clock, zero human keystrokes between the two agents.
+Codex was waiting on an `inbox(wait_ms=15000)` long-poll; Claude's `send` woke
+it; Codex computed and replied; Claude's `inbox` returned the answer. Sidebar's
+own overhead is ~35ms; the rest is the LLMs thinking.
+
 ## What works today
 
 - `sidebar serve` — long-lived daemon (SQLite at `~/.sidebar/sidebar.db`, unix
@@ -218,6 +233,9 @@ See [`examples/`](./examples):
 - `quickstart.sh` — runs a daemon in a sandbox, fires messages, shows tail.
 - `two-agents.sh` — drives two `sidebar mcp` stubs through JSON-RPC to
   simulate two real agents (alice + bob) talking through the daemon.
+- **`demo-claude-codex.sh`** — the real thing: launches `claude` and
+  `codex` as subshells; they coordinate on a math question through
+  sidebar with no human in the loop.
 - `bench.sh` — measures send/wake/drain/schedule/status latency.
 - `claude-commands/` — `/sidebar-start` and `/sidebar-check` slash command
   definitions for Claude Code. Drop into `.claude/commands/`.
