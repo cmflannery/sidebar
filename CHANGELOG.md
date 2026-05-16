@@ -13,6 +13,14 @@ in 0.x).
   `x86_64-apple-darwin`, and `x86_64-unknown-linux-gnu`, tarballs each
   with its `sha256` sum, and attaches them to the GitHub Release.
 
+### Fixed
+- **Mentions could bypass the 64-char name cap.** `extract_mentions`
+  fed names directly into `ensure_agent_blocking`, which trusts its
+  input. Now mentions are filtered through `validate_name` before
+  upserting; ones that fail (too long, contain whitespace, etc.) are
+  silently dropped. Test `mentions_cannot_bypass_name_length_cap`
+  asserts `@<70-char>` no longer creates an agent.
+
 ### Changed
 - **Mentions per message capped at 32.** A 64 KB body could technically
   hold thousands of `@x` tokens; the daemon now resolves at most 32 of

@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::Mutex;
 
-use crate::types::{Intent, Message, Recipient};
+use crate::types::{Intent, Message, Recipient, validate_name};
 use serde::{Deserialize, Serialize};
 
 const SCHEMA: &str = include_str!("schema.sql");
@@ -271,10 +271,14 @@ impl Store {
             // it) so we skip there. The recipient agent is created on the
             // fly if it doesn't exist yet — same affordance as `send @new`.
             // Capped to MAX_MENTIONS_PER_MESSAGE to keep one runaway send
-            // from generating thousands of delivery rows.
+            // from generating thousands of delivery rows. Mentions whose
+            // captured name fails `validate_name` are silently dropped —
+            // those couldn't be valid agents anyway, and we don't want
+            // mention syntax to bypass the dispatch-level name caps.
             if !matches!(&to, Recipient::Agent(_)) {
                 for name in extract_mentions(&body)
                     .into_iter()
+                    .filter(|n| validate_name(n).is_ok())
                     .take(MAX_MENTIONS_PER_MESSAGE)
                 {
                     let mid = ensure_agent_blocking(&tx, &name)?;

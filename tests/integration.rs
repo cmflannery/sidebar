@@ -169,6 +169,21 @@ fn home_dir_is_chmod_0700() {
 }
 
 #[test]
+fn mentions_cannot_bypass_name_length_cap() {
+    let sb = Sandbox::new();
+    let long_name = "z".repeat(70); // > 64 char cap
+    // The send itself succeeds — mention parsing is lenient — but the
+    // 70-char mention should be silently dropped, not create an agent.
+    sb.stdout(&["send", "#general", &format!("hi @{long_name}")]);
+
+    let participants = sb.stdout(&["participants"]);
+    assert!(
+        !participants.contains(&long_name),
+        "mention-created agent bypassed the name cap: {participants}"
+    );
+}
+
+#[test]
 fn many_mentions_capped_at_32_recipients() {
     let sb = Sandbox::new();
     // Build a body with 50 distinct @-mentions.
