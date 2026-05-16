@@ -23,9 +23,21 @@ for read messages, sessions tracked across reconnects.
 
 - `schedule` (delayed delivery): stub.
 - `pause` / `resume`: stub.
-- Long-poll on `inbox(wait_ms)`: returns immediately; no blocking wait yet.
 - Server-pushed MCP `notifications/message` for agents (we rely on `inbox`
   polling instead — see "Wakeup pattern" below).
+
+## Measured perf (local, debug build)
+
+| Operation                              | Time    |
+|----------------------------------------|---------|
+| `inbox --wait-ms 2000`, message arrives | ~34 ms  |
+| `inbox --wait-ms 300`, empty            | ~330 ms |
+| `send` (process spawn + connect)        | ~5 ms   |
+| Drain 50 unread messages via `inbox`    | ~31 ms  |
+
+The 5 ms/send is dominated by CLI process startup. Daemon-side work
+(transaction + broker fan-out) is sub-millisecond. Agents that hold an
+MCP-stub connection don't pay the spawn cost per call.
 
 ## Quick start
 

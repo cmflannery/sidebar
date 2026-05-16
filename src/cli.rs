@@ -15,6 +15,7 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Mcp { as_name } => mcp(as_name).await,
         Command::Tail { json } => tail(json).await,
         Command::Send { to, body } => send(to, body).await,
+        Command::Inbox { as_name, wait_ms } => inbox(as_name, wait_ms).await,
         Command::Say { body } => say(body).await,
         Command::Participants => participants().await,
         Command::History {
@@ -105,6 +106,34 @@ async fn send(to: String, body: String) -> Result<()> {
         anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
     }
     Ok(())
+}
+
+async fn inbox(as_name: String, wait_ms: Option<u64>) -> Result<()> {
+    let mut client = Client::connect_as(&as_name).await?;
+    let resp = client.request(Op::Inbox { wait_ms }).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    match resp.data {
+        Some(ResponseData::Messages { messages }) => {
+            for m in messages {
+                let to_label = match m.to {
+                    Recipient::Agent(n) => format!("@{n}"),
+                    Recipient::Channel(n) => format!("#{n}"),
+                    Recipient::Broadcast => "*".to_string(),
+                };
+                println!(
+                    "[{}] {} → {}: {}",
+                    m.created_at.format("%H:%M:%S"),
+                    m.from,
+                    to_label,
+                    m.body
+                );
+            }
+            Ok(())
+        }
+        other => anyhow::bail!("unexpected response data: {other:?}"),
+    }
 }
 
 async fn say(body: String) -> Result<()> {

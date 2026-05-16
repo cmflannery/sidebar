@@ -42,6 +42,17 @@ pub enum Command {
     /// Send a message as `master` to an agent or channel.
     Send { to: String, body: String },
 
+    /// Read unread messages addressed to an agent (default: `master`).
+    /// Marks messages as read on return.
+    Inbox {
+        /// Speak as this agent.
+        #[arg(long = "as", default_value = "master")]
+        as_name: String,
+        /// Long-poll up to this many milliseconds for new messages.
+        #[arg(long)]
+        wait_ms: Option<u64>,
+    },
+
     /// Broadcast a message as `master`.
     Say { body: String },
 

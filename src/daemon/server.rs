@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -12,6 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
+use tokio::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::daemon::store::Store;
@@ -211,6 +213,52 @@ async fn request_loop(
     Ok(())
 }
 
+/// Maximum a long-poll inbox can block before returning empty. Caps misbehaved
+/// clients; agents that genuinely want a long wait can re-call.
+const MAX_INBOX_WAIT_MS: u64 = 300_000; // 5 minutes
+
+async fn fetch_inbox_with_long_poll(
+    daemon: &Daemon,
+    agent_name: &str,
+    wait_ms: Option<u64>,
+) -> Result<ResponseData> {
+    let messages = daemon.store.fetch_inbox(agent_name).await?;
+    let wait = wait_ms.unwrap_or(0).min(MAX_INBOX_WAIT_MS);
+    if !messages.is_empty() || wait == 0 {
+        return Ok(ResponseData::Messages { messages });
+    }
+
+    let mut rx = daemon.events.subscribe();
+    let deadline = Instant::now() + Duration::from_millis(wait);
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(ResponseData::Messages { messages: vec![] });
+        }
+        tokio::select! {
+            biased;
+            () = tokio::time::sleep(remaining) => {
+                return Ok(ResponseData::Messages { messages: vec![] });
+            }
+            evt = rx.recv() => match evt {
+                Ok(Event::Message { from, .. }) if from != agent_name => {
+                    let msgs = daemon.store.fetch_inbox(agent_name).await?;
+                    if !msgs.is_empty() {
+                        return Ok(ResponseData::Messages { messages: msgs });
+                    }
+                    // False positive — event was for someone else; keep waiting.
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    return Ok(ResponseData::Messages { messages: vec![] });
+                }
+                // Own send, non-Message event, or lag — ignore and keep waiting.
+                _ => {}
+            }
+        }
+    }
+}
+
 fn parse_id_best_effort(line: &str) -> u64 {
     serde_json::from_str::<Value>(line)
         .ok()
@@ -261,14 +309,7 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 Err(e) => Err(e),
             }
         }
-        Op::Inbox { wait_ms: _ } => {
-            // wait_ms long-poll deferred; v1 returns whatever is unread now.
-            daemon
-                .store
-                .fetch_inbox(agent_name)
-                .await
-                .map(|messages| ResponseData::Messages { messages })
-        }
+        Op::Inbox { wait_ms } => fetch_inbox_with_long_poll(daemon, agent_name, wait_ms).await,
         Op::History {
             channel,
             with,

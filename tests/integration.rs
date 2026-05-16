@@ -147,6 +147,59 @@ fn pause_is_still_stubbed_and_errors_explicitly() {
     assert!(err.contains("not yet implemented"), "stderr was: {err}");
 }
 
+#[test]
+fn inbox_wait_returns_at_timeout_when_empty() {
+    let sb = Sandbox::new();
+    let start = Instant::now();
+    let out = sb.stdout(&["inbox", "--as", "alone", "--wait-ms", "300"]);
+    let elapsed = start.elapsed();
+
+    assert!(out.trim().is_empty(), "expected empty inbox, got: {out:?}");
+    // Should wait at least the requested duration, with some headroom for
+    // CLI startup + daemon round-trip. Cap with a generous upper bound.
+    assert!(
+        elapsed >= Duration::from_millis(290),
+        "returned too early: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(2000),
+        "returned far too late: {elapsed:?}"
+    );
+}
+
+#[test]
+fn inbox_wait_wakes_when_message_arrives() {
+    let sb = Sandbox::new();
+
+    // Spawn a long-polling inbox in another thread.
+    let home = sb.home.clone();
+    let bin = sidebar_bin();
+    let inbox_thread = std::thread::spawn(move || {
+        let t0 = Instant::now();
+        let out = Command::new(&bin)
+            .args(["inbox", "--as", "bob", "--wait-ms", "5000"])
+            .env("SIDEBAR_HOME", &home)
+            .output()
+            .expect("run inbox");
+        (t0.elapsed(), out)
+    });
+
+    // Give the waiter time to register its broadcast subscription.
+    std::thread::sleep(Duration::from_millis(150));
+
+    sb.stdout(&["send", "@bob", "wake up bob"]);
+
+    let (elapsed, out) = inbox_thread.join().expect("inbox thread");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "inbox failed: {:?}", out.stderr);
+    assert!(stdout.contains("wake up bob"), "missing body: {stdout}");
+    // Must wake well before the 5s timeout.
+    assert!(
+        elapsed < Duration::from_millis(1000),
+        "wake too slow ({elapsed:?}); long-poll not actually triggering"
+    );
+}
+
 /// Regression: the MCP stub must start cleanly even when the daemon is down.
 /// Otherwise Claude Code reports "-32000" the moment sidebar is configured
 /// before `sidebar serve` is running. Tool calls should return a friendly
