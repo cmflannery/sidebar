@@ -687,12 +687,12 @@ impl Store {
         .await?
     }
 
-    /// Delete read messages older than `retention_days` and scheduled rows
-    /// that have already fired (status='delivered' or 'failed') and are
-    /// also older than the cutoff. Pending scheduled rows are left alone
-    /// — they're still waiting to fire.
-    /// Returns the number of message rows deleted (scheduled cleanup is
-    /// secondary and isn't surfaced in the count).
+    /// Delete read messages older than `retention_days`, scheduled rows
+    /// that have already fired (status='delivered' or 'failed') older
+    /// than the cutoff, and sessions that have ended older than the
+    /// cutoff. Pending scheduled rows and live sessions are left alone.
+    /// Returns the number of message rows deleted (scheduled and session
+    /// cleanup are secondary and aren't surfaced in the count).
     pub async fn cleanup_old(&self, retention_days: i64) -> Result<usize> {
         let conn = self.conn.clone();
         let cutoff = Utc::now() - chrono::Duration::days(retention_days);
@@ -713,12 +713,18 @@ impl Store {
                 ",
                 params![cutoff_str],
             )?;
-            // Scheduled rows that have already fired (or failed) and
-            // are older than retention are no longer interesting.
             tx.execute(
                 "DELETE FROM scheduled
                  WHERE status IN ('delivered', 'failed')
                    AND deliver_at < ?1",
+                params![cutoff_str],
+            )?;
+            // Ended sessions are operational history; keep them through
+            // the retention window, drop them afterward. Live sessions
+            // (ended_at IS NULL) are always kept.
+            tx.execute(
+                "DELETE FROM sessions
+                 WHERE ended_at IS NOT NULL AND ended_at < ?1",
                 params![cutoff_str],
             )?;
             tx.commit()?;

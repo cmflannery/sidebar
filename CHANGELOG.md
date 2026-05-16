@@ -32,6 +32,10 @@ in 0.x).
   asserts `@<70-char>` no longer creates an agent.
 
 ### Changed
+- **Retention cleanup also prunes ended sessions** older than the
+  retention cutoff. Live sessions (`ended_at IS NULL`) are kept. Was
+  a slow leak: every MCP connection logged a row that was never
+  removed.
 - **Mentions per message capped at 32.** A 64 KB body could technically
   hold thousands of `@x` tokens; the daemon now resolves at most 32 of
   them as recipients. The message body still contains all tokens — only
