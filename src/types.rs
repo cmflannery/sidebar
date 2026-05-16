@@ -31,6 +31,25 @@ pub enum Recipient {
     Broadcast,
 }
 
+impl Recipient {
+    /// Parse the wire `to` field.
+    /// - `@name`   → Agent
+    /// - `#name`   → Channel
+    /// - `*`       → Broadcast
+    /// - bare name → Agent (forgiving)
+    pub fn parse(s: &str) -> Self {
+        if s == "*" {
+            Self::Broadcast
+        } else if let Some(rest) = s.strip_prefix('@') {
+            Self::Agent(rest.to_string())
+        } else if let Some(rest) = s.strip_prefix('#') {
+            Self::Channel(rest.to_string())
+        } else {
+            Self::Agent(s.to_string())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Intent {

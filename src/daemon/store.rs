@@ -7,15 +7,19 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::Mutex;
+
+use crate::types::{Intent, Message, Recipient};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
 /// Default retention for messages whose deliveries are all read.
 pub const DEFAULT_RETENTION_DAYS: i64 = 30;
+/// Channel everyone joins on first sight.
+pub const DEFAULT_CHANNEL: &str = "general";
 
 #[derive(Clone)]
 pub struct Store {
@@ -32,6 +36,15 @@ pub struct AgentRow {
     pub last_seen: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SendResult {
+    pub message_id: i64,
+    /// Agent names that the new message was delivered to. Surfaces later
+    /// for per-recipient filtered subscriptions.
+    #[allow(dead_code)]
+    pub recipients: Vec<String>,
+}
+
 impl Store {
     /// Open (or create) the database at `path`, run schema, and seed the
     /// `master` agent if absent.
@@ -40,11 +53,10 @@ impl Store {
         let conn = tokio::task::spawn_blocking(move || -> Result<Connection> {
             let conn = Connection::open(&path)
                 .with_context(|| format!("opening sqlite at {}", path.display()))?;
-            // WAL mode + foreign keys are non-negotiable defaults.
             conn.pragma_update(None, "journal_mode", "WAL")?;
             conn.pragma_update(None, "foreign_keys", "ON")?;
             conn.execute_batch(SCHEMA).context("applying schema")?;
-            seed_master(&conn).context("seeding master agent")?;
+            seed_defaults(&conn).context("seeding defaults")?;
             Ok(conn)
         })
         .await??;
@@ -52,6 +64,18 @@ impl Store {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// Ensure an agent row exists for `name`, updating `last_seen`. Auto-joins
+    /// the agent to `#general` if newly created. Returns the agent id.
+    pub async fn ensure_agent(&self, name: &str) -> Result<i64> {
+        let conn = self.conn.clone();
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || -> Result<i64> {
+            let conn = conn.blocking_lock();
+            ensure_agent_blocking(&conn, &name)
+        })
+        .await?
     }
 
     /// List all known agents.
@@ -78,15 +102,226 @@ impl Store {
         .await?
     }
 
-    /// Delete read messages older than `cutoff`, plus their delivery rows.
-    /// Agents and channels are kept forever.
+    /// List channel names.
+    pub async fn list_channels(&self) -> Result<Vec<String>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn.prepare("SELECT name FROM channels ORDER BY id")?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await?
+    }
+
+    /// Insert a message + delivery rows in one transaction.
+    pub async fn send_message(
+        &self,
+        from_name: &str,
+        to: &Recipient,
+        body: &str,
+        intent: Option<Intent>,
+        reply_to: Option<i64>,
+    ) -> Result<SendResult> {
+        let conn = self.conn.clone();
+        let from_name = from_name.to_string();
+        let to = to.clone();
+        let body = body.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        tokio::task::spawn_blocking(move || -> Result<SendResult> {
+            let mut conn = conn.blocking_lock();
+            let tx = conn.transaction()?;
+
+            let from_id = ensure_agent_blocking(&tx, &from_name)?;
+
+            let (to_agent, to_channel, is_broadcast) = match &to {
+                Recipient::Agent(name) => {
+                    let id = ensure_agent_blocking(&tx, name)?;
+                    (Some(id), None, false)
+                }
+                Recipient::Channel(name) => {
+                    let id = ensure_channel_blocking(&tx, name)?;
+                    (None, Some(id), false)
+                }
+                Recipient::Broadcast => (None, None, true),
+            };
+
+            let intent_str = intent.map(intent_to_str);
+
+            tx.execute(
+                "INSERT INTO messages (from_agent, to_agent, to_channel, is_broadcast, body, intent, reply_to, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![from_id, to_agent, to_channel, i64::from(is_broadcast), body, intent_str, reply_to, now],
+            )?;
+            let msg_id = tx.last_insert_rowid();
+
+            // Compute recipient agent ids.
+            let recipient_ids: Vec<(i64, String)> = match &to {
+                Recipient::Agent(_) => {
+                    let id = to_agent.expect("agent recipient must have id");
+                    let name = agent_name_blocking(&tx, id)?;
+                    vec![(id, name)]
+                }
+                Recipient::Channel(_) => {
+                    let cid = to_channel.expect("channel recipient must have id");
+                    let mut stmt = tx.prepare(
+                        "SELECT a.id, a.name FROM agents a
+                         JOIN memberships m ON m.agent_id = a.id
+                         WHERE m.channel_id = ?1 AND a.id != ?2",
+                    )?;
+                    stmt.query_map(params![cid, from_id], |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+                }
+                Recipient::Broadcast => {
+                    let mut stmt = tx.prepare(
+                        "SELECT id, name FROM agents WHERE id != ?1",
+                    )?;
+                    stmt.query_map(params![from_id], |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+                }
+            };
+
+            for (aid, _) in &recipient_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO deliveries (message_id, agent_id, delivered_at)
+                     VALUES (?1, ?2, ?3)",
+                    params![msg_id, aid, now],
+                )?;
+            }
+
+            tx.commit()?;
+
+            Ok(SendResult {
+                message_id: msg_id,
+                recipients: recipient_ids.into_iter().map(|(_, n)| n).collect(),
+            })
+        })
+        .await?
+    }
+
+    /// Read unread messages for `agent_name`, marking them read in the same
+    /// transaction. Returns messages oldest-first.
+    pub async fn fetch_inbox(&self, agent_name: &str) -> Result<Vec<Message>> {
+        let conn = self.conn.clone();
+        let agent_name = agent_name.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<Message>> {
+            let mut conn = conn.blocking_lock();
+            let tx = conn.transaction()?;
+            let agent_id = ensure_agent_blocking(&tx, &agent_name)?;
+            let now = Utc::now().to_rfc3339();
+
+            let messages = {
+                let mut stmt = tx.prepare(
+                    "SELECT m.id, fa.name AS from_name,
+                            ta.name AS to_agent, tc.name AS to_channel, m.is_broadcast,
+                            m.body, m.intent, m.reply_to, m.created_at
+                     FROM messages m
+                     JOIN agents fa ON fa.id = m.from_agent
+                     LEFT JOIN agents ta ON ta.id = m.to_agent
+                     LEFT JOIN channels tc ON tc.id = m.to_channel
+                     JOIN deliveries d ON d.message_id = m.id
+                     WHERE d.agent_id = ?1 AND d.read_at IS NULL
+                     ORDER BY m.created_at ASC",
+                )?;
+                stmt.query_map(params![agent_id], row_to_message)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            tx.execute(
+                "UPDATE deliveries SET read_at = ?1
+                 WHERE agent_id = ?2 AND read_at IS NULL",
+                params![now, agent_id],
+            )?;
+            tx.commit()?;
+            Ok(messages)
+        })
+        .await?
+    }
+
+    /// History within a channel (newest-last, oldest-first, capped to `limit`).
+    pub async fn history_channel(&self, channel_name: &str, limit: usize) -> Result<Vec<Message>> {
+        let conn = self.conn.clone();
+        let channel_name = channel_name.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<Message>> {
+            let conn = conn.blocking_lock();
+            let cid: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM channels WHERE name = ?1",
+                    params![channel_name],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(cid) = cid else { return Ok(vec![]) };
+
+            let lim = i64::try_from(limit).unwrap_or(i64::MAX);
+            let mut stmt = conn.prepare(
+                "SELECT m.id, fa.name AS from_name,
+                        ta.name AS to_agent, tc.name AS to_channel, m.is_broadcast,
+                        m.body, m.intent, m.reply_to, m.created_at
+                 FROM messages m
+                 JOIN agents fa ON fa.id = m.from_agent
+                 LEFT JOIN agents ta ON ta.id = m.to_agent
+                 LEFT JOIN channels tc ON tc.id = m.to_channel
+                 WHERE m.to_channel = ?1
+                 ORDER BY m.created_at DESC
+                 LIMIT ?2",
+            )?;
+            let mut rows = stmt
+                .query_map(params![cid, lim], row_to_message)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.reverse();
+            Ok(rows)
+        })
+        .await?
+    }
+
+    /// History of DMs between two agents (oldest-first, capped).
+    pub async fn history_dm(&self, a: &str, b: &str, limit: usize) -> Result<Vec<Message>> {
+        let conn = self.conn.clone();
+        let a = a.to_string();
+        let b = b.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<Message>> {
+            let conn = conn.blocking_lock();
+            let aid = ensure_agent_blocking(&conn, &a)?;
+            let bid = ensure_agent_blocking(&conn, &b)?;
+
+            let lim = i64::try_from(limit).unwrap_or(i64::MAX);
+            let mut stmt = conn.prepare(
+                "SELECT m.id, fa.name AS from_name,
+                        ta.name AS to_agent, tc.name AS to_channel, m.is_broadcast,
+                        m.body, m.intent, m.reply_to, m.created_at
+                 FROM messages m
+                 JOIN agents fa ON fa.id = m.from_agent
+                 LEFT JOIN agents ta ON ta.id = m.to_agent
+                 LEFT JOIN channels tc ON tc.id = m.to_channel
+                 WHERE (m.from_agent = ?1 AND m.to_agent = ?2)
+                    OR (m.from_agent = ?2 AND m.to_agent = ?1)
+                 ORDER BY m.created_at DESC
+                 LIMIT ?3",
+            )?;
+            let mut rows = stmt
+                .query_map(params![aid, bid, lim], row_to_message)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.reverse();
+            Ok(rows)
+        })
+        .await?
+    }
+
+    /// Delete read messages older than `retention_days`. Returns rows deleted.
     pub async fn cleanup_old(&self, retention_days: i64) -> Result<usize> {
         let conn = self.conn.clone();
         let cutoff = Utc::now() - chrono::Duration::days(retention_days);
         tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut conn = conn.blocking_lock();
             let tx = conn.transaction()?;
-            // Messages are "fully read" when every delivery row for them has read_at set.
             let cutoff_str = cutoff.to_rfc3339();
             let dropped = tx.execute(
                 r"
@@ -107,33 +342,14 @@ impl Store {
         .await?
     }
 
-    /// Open a new session row for `agent_name`. Returns session id.
+    /// Open a session for `agent_name`. Returns session id.
     pub async fn open_session(&self, agent_name: &str) -> Result<i64> {
         let conn = self.conn.clone();
         let agent_name = agent_name.to_string();
         let now = Utc::now().to_rfc3339();
         tokio::task::spawn_blocking(move || -> Result<i64> {
             let conn = conn.blocking_lock();
-            let agent_id: Option<i64> = conn
-                .query_row(
-                    "SELECT id FROM agents WHERE name = ?1",
-                    params![agent_name],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let agent_id = if let Some(id) = agent_id {
-                id
-            } else {
-                conn.execute(
-                    "INSERT INTO agents (name, first_seen, last_seen) VALUES (?1, ?2, ?2)",
-                    params![agent_name, now],
-                )?;
-                conn.last_insert_rowid()
-            };
-            conn.execute(
-                "UPDATE agents SET last_seen = ?1 WHERE id = ?2",
-                params![now, agent_id],
-            )?;
+            let agent_id = ensure_agent_blocking(&conn, &agent_name)?;
             conn.execute(
                 "INSERT INTO sessions (agent_id, started_at) VALUES (?1, ?2)",
                 params![agent_id, now],
@@ -143,7 +359,6 @@ impl Store {
         .await?
     }
 
-    /// Mark a session as ended.
     pub async fn close_session(&self, session_id: i64) -> Result<()> {
         let conn = self.conn.clone();
         let now = Utc::now().to_rfc3339();
@@ -158,8 +373,6 @@ impl Store {
         .await?
     }
 
-    /// Mark all open sessions as ended at `now`. Called on daemon startup
-    /// to clean up sessions left dangling by an ungraceful shutdown.
     pub async fn close_dangling_sessions(&self) -> Result<usize> {
         let conn = self.conn.clone();
         let now = Utc::now().to_rfc3339();
@@ -174,7 +387,70 @@ impl Store {
     }
 }
 
-fn seed_master(conn: &Connection) -> Result<()> {
+// ---- helpers (sync, run inside spawn_blocking) ----
+
+fn ensure_agent_blocking(conn: &Connection, name: &str) -> Result<i64> {
+    let now = Utc::now().to_rfc3339();
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM agents WHERE name = ?1",
+            params![name],
+            |r| r.get(0),
+        )
+        .optional()?;
+
+    let id = if let Some(id) = existing {
+        conn.execute(
+            "UPDATE agents SET last_seen = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        id
+    } else {
+        conn.execute(
+            "INSERT INTO agents (name, first_seen, last_seen) VALUES (?1, ?2, ?2)",
+            params![name, now],
+        )?;
+        let new_id = conn.last_insert_rowid();
+        // Auto-join #general.
+        if let Ok(cid) = ensure_channel_blocking(conn, DEFAULT_CHANNEL) {
+            conn.execute(
+                "INSERT OR IGNORE INTO memberships (agent_id, channel_id, joined_at)
+                 VALUES (?1, ?2, ?3)",
+                params![new_id, cid, now],
+            )?;
+        }
+        new_id
+    };
+    Ok(id)
+}
+
+fn ensure_channel_blocking(conn: &Connection, name: &str) -> Result<i64> {
+    let now = Utc::now().to_rfc3339();
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM channels WHERE name = ?1",
+            params![name],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    conn.execute(
+        "INSERT INTO channels (name, created_at) VALUES (?1, ?2)",
+        params![name, now],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+fn agent_name_blocking(conn: &Connection, id: i64) -> Result<String> {
+    conn.query_row("SELECT name FROM agents WHERE id = ?1", params![id], |r| {
+        r.get(0)
+    })
+    .map_err(|e| anyhow!("agent {id} not found: {e}"))
+}
+
+fn seed_defaults(conn: &Connection) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT OR IGNORE INTO agents (name, display_name, first_seen, last_seen)
@@ -182,12 +458,80 @@ fn seed_master(conn: &Connection) -> Result<()> {
         params![now],
     )?;
     conn.execute(
-        "INSERT OR IGNORE INTO channels (name, created_at) VALUES ('general', ?1)",
-        params![now],
+        "INSERT OR IGNORE INTO channels (name, created_at) VALUES (?1, ?2)",
+        params![DEFAULT_CHANNEL, now],
     )?;
+    // Auto-join master to #general.
+    if let (Ok(master_id), Ok(general_id)) = (
+        conn.query_row("SELECT id FROM agents WHERE name = 'master'", [], |r| {
+            r.get::<_, i64>(0)
+        }),
+        conn.query_row(
+            "SELECT id FROM channels WHERE name = ?1",
+            params![DEFAULT_CHANNEL],
+            |r| r.get::<_, i64>(0),
+        ),
+    ) {
+        conn.execute(
+            "INSERT OR IGNORE INTO memberships (agent_id, channel_id, joined_at)
+             VALUES (?1, ?2, ?3)",
+            params![master_id, general_id, now],
+        )?;
+    }
     Ok(())
 }
 
 fn parse_ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s).map_or_else(|_| Utc::now(), |d| d.with_timezone(&Utc))
+}
+
+fn intent_to_str(i: Intent) -> &'static str {
+    match i {
+        Intent::Fyi => "fyi",
+        Intent::Question => "question",
+        Intent::Task => "task",
+        Intent::Handoff => "handoff",
+    }
+}
+
+fn intent_from_str(s: &str) -> Option<Intent> {
+    match s {
+        "fyi" => Some(Intent::Fyi),
+        "question" => Some(Intent::Question),
+        "task" => Some(Intent::Task),
+        "handoff" => Some(Intent::Handoff),
+        _ => None,
+    }
+}
+
+fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+    let id: i64 = r.get(0)?;
+    let from: String = r.get(1)?;
+    let to_agent: Option<String> = r.get(2)?;
+    let to_channel: Option<String> = r.get(3)?;
+    let is_broadcast: i64 = r.get(4)?;
+    let body: String = r.get(5)?;
+    let intent: Option<String> = r.get(6)?;
+    let reply_to: Option<i64> = r.get(7)?;
+    let created_at: String = r.get(8)?;
+
+    let to = if is_broadcast != 0 {
+        Recipient::Broadcast
+    } else if let Some(c) = to_channel {
+        Recipient::Channel(c)
+    } else if let Some(a) = to_agent {
+        Recipient::Agent(a)
+    } else {
+        Recipient::Broadcast // shouldn't happen for well-formed rows
+    };
+
+    Ok(Message {
+        id,
+        from,
+        to,
+        body,
+        intent: intent.and_then(|s| intent_from_str(&s)),
+        reply_to,
+        created_at: parse_ts(&created_at),
+    })
 }

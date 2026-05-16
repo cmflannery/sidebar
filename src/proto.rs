@@ -62,6 +62,9 @@ pub enum Op {
     Channels,
     Pause,
     Resume,
+    /// Switch this connection into event-forwarding mode. Any subsequent
+    /// `Event::*` frames pushed by the daemon will arrive on this socket.
+    Subscribe,
 }
 
 fn default_limit() -> usize {
