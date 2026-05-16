@@ -23,8 +23,15 @@ for read messages, sessions tracked across reconnects.
 
 - Server-pushed MCP `notifications/message` for agents (we rely on `inbox`
   long-poll instead — see "Wakeup pattern" below).
-- A unique-name strategy for multiple Claude Code sessions sharing the
-  same MCP config — for now, set `SIDEBAR_AGENT_NAME` per terminal.
+
+## Multi-session naming
+
+Two concurrent Claude Code sessions sharing the same MCP config both
+launch a `sidebar mcp --as claude-code` stub. The daemon notices the
+collision and assigns the second session `claude-code-2`. Each gets its
+own inbox, but `master` sending `@claude-code` only reaches the first.
+To address them distinctly, use the assigned names — `mcp__sidebar__whoami`
+reports each agent's actual name.
 
 ## Inspecting state
 

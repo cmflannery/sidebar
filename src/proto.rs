@@ -22,6 +22,14 @@ pub enum Hello {
     },
 }
 
+/// Acknowledges a Hello and tells the client which name the daemon
+/// actually assigned. For MCP clients, this can be a suffixed version
+/// of the requested name when another session already holds it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HelloAck {
+    pub agent: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u64,

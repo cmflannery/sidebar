@@ -3,6 +3,7 @@
 //! Listens on the shared socket path; accepts both MCP-stub and CLI connections.
 //! Each line on the wire is a JSON frame (NDJSON). See ARCHITECTURE.md §5.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +19,7 @@ use tokio::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::daemon::store::Store;
-use crate::proto::{Event, Hello, Op, Request, Response, ResponseData};
+use crate::proto::{Event, Hello, HelloAck, Op, Request, Response, ResponseData};
 use crate::types::Recipient;
 
 #[derive(Clone)]
@@ -29,6 +30,9 @@ pub struct Daemon {
     pub paused: Arc<AtomicBool>,
     /// Used by `Op::Status` to report uptime.
     pub started_at: std::time::Instant,
+    /// MCP session names currently in use. New connections that request
+    /// a held name get suffixed (-2, -3, …). Released on disconnect.
+    pub active_names: Arc<tokio::sync::Mutex<HashSet<String>>>,
 }
 
 impl Daemon {
@@ -39,11 +43,35 @@ impl Daemon {
             events,
             paused: Arc::new(AtomicBool::new(false)),
             started_at: std::time::Instant::now(),
+            active_names: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         }
     }
 
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Acquire)
+    }
+
+    /// Reserve a unique name for an MCP session. If `requested` is free,
+    /// returns it; otherwise tries `requested-2`, `requested-3`, … until
+    /// it finds one. The chosen name is held until `release_name` runs.
+    pub async fn reserve_unique_name(&self, requested: &str) -> String {
+        let mut names = self.active_names.lock().await;
+        if !names.contains(requested) {
+            names.insert(requested.to_string());
+            return requested.to_string();
+        }
+        for i in 2.. {
+            let candidate = format!("{requested}-{i}");
+            if !names.contains(&candidate) {
+                names.insert(candidate.clone());
+                return candidate;
+            }
+        }
+        unreachable!("infinite loop bound by u64::MAX is unreachable in practice")
+    }
+
+    pub async fn release_name(&self, name: &str) {
+        self.active_names.lock().await.remove(name);
     }
 }
 
@@ -119,16 +147,25 @@ async fn handle_conn(daemon: Arc<Daemon>, stream: UnixStream) -> Result<()> {
     };
     let hello: Hello = serde_json::from_str(&hello_line).context("parsing hello")?;
 
-    let (agent_name, session_id) = match &hello {
+    let (agent_name, session_id, holds_name) = match &hello {
         Hello::Mcp { agent, .. } => {
-            let sid = daemon.store.open_session(agent).await?;
-            info!(agent = %agent, session = sid, "mcp client registered");
-            (agent.clone(), Some(sid))
+            // Uniquify the name if it's already in use by another active session.
+            let assigned = daemon.reserve_unique_name(agent).await;
+            let sid = daemon.store.open_session(&assigned).await?;
+            if assigned == *agent {
+                info!(agent = %assigned, session = sid, "mcp client registered");
+            } else {
+                info!(
+                    requested = %agent, assigned = %assigned, session = sid,
+                    "mcp name collision; assigned suffixed name"
+                );
+            }
+            (assigned, Some(sid), true)
         }
         Hello::Cli { speaking_as } => {
             daemon.store.ensure_agent(speaking_as).await?;
             info!(as_who = %speaking_as, "cli client connected");
-            (speaking_as.clone(), None)
+            (speaking_as.clone(), None, false)
         }
     };
 
@@ -136,12 +173,28 @@ async fn handle_conn(daemon: Arc<Daemon>, stream: UnixStream) -> Result<()> {
     let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>(64);
     let writer_task = tokio::spawn(writer_task(write, out_rx));
 
+    // Send the HelloAck before any request processing.
+    let mut ack_bytes = serde_json::to_vec(&HelloAck {
+        agent: agent_name.clone(),
+    })?;
+    ack_bytes.push(b'\n');
+    if out_tx.send(ack_bytes).await.is_err() {
+        // writer task gone; nothing more to do
+        if holds_name {
+            daemon.release_name(&agent_name).await;
+        }
+        return Ok(());
+    }
+
     let req_result = request_loop(&daemon, &agent_name, &mut reader, out_tx).await;
 
     if let Some(sid) = session_id {
         if let Err(e) = daemon.store.close_session(sid).await {
             warn!(error = %e, session = sid, "failed to close session");
         }
+    }
+    if holds_name {
+        daemon.release_name(&agent_name).await;
     }
 
     // out_tx dropped at end of request_loop → writer_task drains and exits.

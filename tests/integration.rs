@@ -3,7 +3,7 @@
 //! Each test gets its own SIDEBAR_HOME tmpdir; the daemon is spawned as a
 //! subprocess and torn down at the end of the test.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -468,6 +468,103 @@ fn two_mcp_stubs_can_exchange_messages() {
     assert!(
         bob_out.contains("alice"),
         "bob's inbox didn't attribute to alice: {bob_out}"
+    );
+}
+
+/// Two concurrent MCP stubs requesting `--as claude-code` should get
+/// distinct names (`claude-code` and `claude-code-2`).
+#[test]
+fn mcp_stubs_get_unique_names_on_collision() {
+    let sb = Sandbox::new();
+
+    // Spawn first stub and hold it open; it will keep the name reserved.
+    let mut first = Command::new(sidebar_bin())
+        .args(["mcp", "--as", "claude-code"])
+        .env("SIDEBAR_HOME", &sb.home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("first stub");
+    let first_stdin = first.stdin.take().expect("first stdin");
+    let first_stdout = first.stdout.take().expect("first stdout");
+
+    // Initialize the first stub and call whoami; keep it open.
+    {
+        let mut stdin = first_stdin;
+        let init = concat!(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"c1","version":"0.1"}}}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#,
+            "\n",
+        );
+        Write::write_all(&mut stdin, init.as_bytes()).unwrap();
+        // Keep stdin open so the stub stays alive holding the name.
+        // Give the daemon a moment to register before we spawn the second.
+        std::thread::sleep(Duration::from_millis(200));
+
+        // While first is still alive, run a second stub requesting the same name.
+        let second_out = run_mcp_stub(
+            &sb.home,
+            "claude-code",
+            concat!(
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"c2","version":"0.1"}}}"#,
+                "\n",
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                "\n",
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#,
+                "\n",
+            ),
+        );
+        // Second stub must have been assigned the suffixed name.
+        assert!(
+            second_out.contains("claude-code-2"),
+            "second stub didn't get suffixed name: {second_out}"
+        );
+
+        // Drop stdin to let first stub finish.
+        drop(stdin);
+    }
+
+    // Drain and close first.
+    let mut buf = Vec::new();
+    let mut so = first_stdout;
+    let _ = Read::read_to_end(&mut so, &mut buf);
+    let first_out = String::from_utf8_lossy(&buf);
+    assert!(
+        first_out.contains("claude-code") && !first_out.contains("claude-code-2"),
+        "first stub should have kept the plain name: {first_out}"
+    );
+    let _ = first.wait();
+}
+
+/// After a stub disconnects, its name should be available for the next stub.
+#[test]
+fn name_is_released_on_disconnect() {
+    let sb = Sandbox::new();
+
+    let whoami_handshake = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0.1"}}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#,
+        "\n",
+    );
+
+    let first = run_mcp_stub(&sb.home, "lonely", whoami_handshake);
+    assert!(first.contains("lonely") && !first.contains("lonely-2"));
+
+    // Give the daemon time to process the disconnect.
+    std::thread::sleep(Duration::from_millis(150));
+
+    // A second stub asking for the same name should now get it cleanly.
+    let second = run_mcp_stub(&sb.home, "lonely", whoami_handshake);
+    assert!(
+        second.contains("lonely") && !second.contains("lonely-2"),
+        "released name wasn't reusable: {second}"
     );
 }
 

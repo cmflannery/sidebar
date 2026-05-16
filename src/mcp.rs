@@ -178,6 +178,9 @@ impl SidebarMcp {
     async fn call(&self, op: Op) -> String {
         let mut guard = self.client.lock().await;
         if guard.is_none() {
+            // Reconnecting after a drop — we want the daemon to assign us
+            // the same name we held before if it's free, so pass our
+            // current `agent_name` (which may itself be a suffixed form).
             match Client::connect_mcp(&self.agent_name, env!("CARGO_PKG_VERSION")).await {
                 Ok(c) => *guard = Some(c),
                 Err(e) => {
@@ -265,21 +268,26 @@ fn parse_intent(s: &str) -> Option<crate::types::Intent> {
     }
 }
 
-pub async fn serve(agent_name: String) -> Result<()> {
+pub async fn serve(requested_name: String) -> Result<()> {
     // Best-effort eager connect — if the daemon's up, we register a session
-    // immediately so the agent appears in `sidebar participants`. If it's
-    // down, we still start the MCP stub; tool calls will retry the connect
-    // and return a clean error to Claude/Codex if the daemon stays down.
-    let client = match Client::connect_mcp(&agent_name, env!("CARGO_PKG_VERSION")).await {
-        Ok(c) => Some(c),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "could not reach sidebar daemon on startup; will retry per tool call"
-            );
-            None
-        }
-    };
+    // immediately so the agent appears in `sidebar participants` and we
+    // learn the (possibly suffixed) name the daemon assigned us. If the
+    // daemon is down, we still start the MCP stub; tool calls retry the
+    // connect and return a clean error to Claude/Codex.
+    let (client, agent_name) =
+        match Client::connect_mcp(&requested_name, env!("CARGO_PKG_VERSION")).await {
+            Ok(c) => {
+                let assigned = c.assigned_name().to_string();
+                (Some(c), assigned)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not reach sidebar daemon on startup; will retry per tool call"
+                );
+                (None, requested_name.clone())
+            }
+        };
     let server = SidebarMcp {
         agent_name,
         client: Arc::new(Mutex::new(client)),

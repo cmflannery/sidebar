@@ -7,12 +7,34 @@ in 0.x).
 
 ## [Unreleased]
 
+## [0.3.0] – 2026-05-16
+
 ### Added
+- **Automatic name uniquification** for MCP sessions. Two concurrent
+  `sidebar mcp --as claude-code` stubs now get `claude-code` and
+  `claude-code-2` respectively, instead of stepping on each other's
+  inbox. The daemon tracks active names in memory and releases them on
+  disconnect. The MCP `whoami` tool reports the assigned name.
+- New wire frame `HelloAck { agent }` sent by the daemon after every
+  Hello. Clients learn their assigned identity from this frame.
 - `sidebar status` — daemon health snapshot: paused state, agent count,
   channel count, unread messages, pending scheduled rows, uptime,
   socket and DB paths. When the daemon is down, prints a friendly
   message instead of erroring.
+- Concurrency stress test: 64 parallel sends all land in history with
+  no losses (`concurrent_sends_all_land_in_history`).
 - `CHANGELOG.md` and `CLAUDE.md` at the repo root.
+
+### Changed
+- **Wire protocol** now expects a HelloAck frame from the daemon
+  immediately after Hello. Clients built on prior versions will break.
+- `Store::send_message` returns `Result<i64>` (the message id) directly
+  instead of a `SendResult` struct. The unused `recipients` field is
+  gone.
+
+### Removed
+- Internal `agent_name_blocking` helper that only existed to populate
+  the now-dead `SendResult.recipients`.
 
 ## [0.2.0] – 2026-05-16
 
