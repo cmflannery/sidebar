@@ -422,6 +422,16 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|id| ResponseData::SendOk { message_id: id })
         }
+        Op::Join { channel } => daemon
+            .store
+            .join_channel(agent_name, &channel)
+            .await
+            .map(|()| ResponseData::SendOk { message_id: 0 }),
+        Op::Leave { channel } => daemon
+            .store
+            .leave_channel(agent_name, &channel)
+            .await
+            .map(|()| ResponseData::SendOk { message_id: 0 }),
         Op::Search { query, limit } => daemon
             .store
             .search_messages(&query, limit)

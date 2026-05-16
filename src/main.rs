@@ -114,6 +114,22 @@ pub enum Command {
         json: bool,
     },
 
+    /// Subscribe an agent to a channel (without leading `#`).
+    Join {
+        /// Channel name (no `#`).
+        channel: String,
+        /// Agent to subscribe (default: master).
+        #[arg(long = "as", default_value = "master")]
+        as_name: String,
+    },
+
+    /// Unsubscribe an agent from a channel.
+    Leave {
+        channel: String,
+        #[arg(long = "as", default_value = "master")]
+        as_name: String,
+    },
+
     /// Hold new message delivery.
     Pause,
 

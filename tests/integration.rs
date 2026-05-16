@@ -188,6 +188,42 @@ fn status_reports_friendly_message_when_daemon_down() {
 }
 
 #[test]
+fn channel_join_delivers_to_member_leave_stops_delivery() {
+    let sb = Sandbox::new();
+
+    // Pre-create the agent by sending it a DM, then have it join #foo.
+    sb.stdout(&["send", "@dave", "create dave"]);
+    // Drain dave's inbox so the next read only contains channel msgs.
+    sb.stdout(&["inbox", "--as", "dave"]);
+
+    // Before joining, a message to #foo doesn't reach dave.
+    sb.stdout(&["send", "#foo", "before join"]);
+    let inbox = sb.stdout(&["inbox", "--as", "dave"]);
+    assert!(
+        !inbox.contains("before join"),
+        "dave received #foo without joining: {inbox}"
+    );
+
+    // After joining, dave receives the next #foo message.
+    sb.stdout(&["join", "foo", "--as", "dave"]);
+    sb.stdout(&["send", "#foo", "after join"]);
+    let inbox = sb.stdout(&["inbox", "--as", "dave"]);
+    assert!(
+        inbox.contains("after join"),
+        "join didn't subscribe: {inbox}"
+    );
+
+    // After leaving, no longer receives.
+    sb.stdout(&["leave", "foo", "--as", "dave"]);
+    sb.stdout(&["send", "#foo", "after leave"]);
+    let inbox = sb.stdout(&["inbox", "--as", "dave"]);
+    assert!(
+        !inbox.contains("after leave"),
+        "leave didn't unsubscribe: {inbox}"
+    );
+}
+
+#[test]
 fn grep_finds_message_bodies_case_insensitive() {
     let sb = Sandbox::new();
     sb.stdout(&["send", "@team", "The Build Is Green"]);
@@ -197,7 +233,10 @@ fn grep_finds_message_bodies_case_insensitive() {
     let out = sb.stdout(&["grep", "build"]);
     assert!(out.contains("Build Is Green"), "missing first match: {out}");
     assert!(out.contains("build failed"), "missing second match: {out}");
-    assert!(!out.contains("rebooting"), "unrelated message in match: {out}");
+    assert!(
+        !out.contains("rebooting"),
+        "unrelated message in match: {out}"
+    );
 
     // JSON shape
     let json = sb.stdout(&["grep", "BUILD", "--json"]);
@@ -211,7 +250,12 @@ fn participants_supports_json() {
     sb.stdout(&["send", "@xena", "hi"]);
     let json = sb.stdout(&["participants", "--json"]);
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-    let names: Vec<&str> = parsed.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    let names: Vec<&str> = parsed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
     assert!(names.contains(&"master"));
     assert!(names.contains(&"xena"));
 }

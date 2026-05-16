@@ -515,6 +515,58 @@ impl Store {
         .await?
     }
 
+    /// Subscribe `agent_name` to a channel. Creates the channel if needed.
+    pub async fn join_channel(&self, agent_name: &str, channel: &str) -> Result<()> {
+        let conn = self.conn.clone();
+        let agent_name = agent_name.to_string();
+        let channel = channel.to_string();
+        let now = Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = conn.blocking_lock();
+            let agent_id = ensure_agent_blocking(&conn, &agent_name)?;
+            let channel_id = ensure_channel_blocking(&conn, &channel)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO memberships (agent_id, channel_id, joined_at)
+                 VALUES (?1, ?2, ?3)",
+                params![agent_id, channel_id, now],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Unsubscribe `agent_name` from a channel. No-op if not a member.
+    pub async fn leave_channel(&self, agent_name: &str, channel: &str) -> Result<()> {
+        let conn = self.conn.clone();
+        let agent_name = agent_name.to_string();
+        let channel = channel.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = conn.blocking_lock();
+            let agent_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM agents WHERE name = ?1",
+                    params![agent_name],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let channel_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM channels WHERE name = ?1",
+                    params![channel],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let (Some(aid), Some(cid)) = (agent_id, channel_id) {
+                conn.execute(
+                    "DELETE FROM memberships WHERE agent_id = ?1 AND channel_id = ?2",
+                    params![aid, cid],
+                )?;
+            }
+            Ok(())
+        })
+        .await?
+    }
+
     /// Case-insensitive substring search over message bodies. Newest-first.
     pub async fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<Message>> {
         let conn = self.conn.clone();

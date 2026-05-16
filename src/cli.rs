@@ -37,6 +37,8 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
             json,
         } => history(channel, with, limit, json).await,
         Command::Grep { query, limit, json } => grep(query, limit, json).await,
+        Command::Join { channel, as_name } => join(channel, as_name).await,
+        Command::Leave { channel, as_name } => leave(channel, as_name).await,
         Command::Pause => pause().await,
         Command::Resume => resume().await,
         Command::Status { json } => status(json).await,
@@ -250,6 +252,36 @@ fn print_messages(messages: &[crate::types::Message], json: bool) -> Result<()> 
             .format("%H:%M:%S");
         println!("[{ts}] {} → {to_label}: {}", m.from, m.body);
     }
+    Ok(())
+}
+
+async fn join(channel: String, as_name: String) -> Result<()> {
+    let channel = channel.trim_start_matches('#').to_string();
+    let mut client = Client::connect_as(&as_name).await?;
+    let resp = client
+        .request(Op::Join {
+            channel: channel.clone(),
+        })
+        .await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    println!("{as_name} joined #{channel}");
+    Ok(())
+}
+
+async fn leave(channel: String, as_name: String) -> Result<()> {
+    let channel = channel.trim_start_matches('#').to_string();
+    let mut client = Client::connect_as(&as_name).await?;
+    let resp = client
+        .request(Op::Leave {
+            channel: channel.clone(),
+        })
+        .await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    println!("{as_name} left #{channel}");
     Ok(())
 }
 

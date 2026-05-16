@@ -68,6 +68,12 @@ fn default_history_limit() -> usize {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ChannelArg {
+    /// Channel name. Leading `#` is tolerated.
+    channel: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SearchArgs {
     /// Substring to look for (case-insensitive).
     query: String,
@@ -141,6 +147,24 @@ impl SidebarMcp {
     #[tool(description = "List known channels.")]
     async fn channels(&self) -> String {
         self.call(Op::Channels).await
+    }
+
+    #[tool(
+        description = "Subscribe the calling agent to a channel. Pass the name without a leading `#`. Auto-creates the channel if it doesn't exist."
+    )]
+    async fn join(&self, Parameters(args): Parameters<ChannelArg>) -> String {
+        self.call(Op::Join {
+            channel: args.channel.trim_start_matches('#').to_string(),
+        })
+        .await
+    }
+
+    #[tool(description = "Unsubscribe the calling agent from a channel.")]
+    async fn leave(&self, Parameters(args): Parameters<ChannelArg>) -> String {
+        self.call(Op::Leave {
+            channel: args.channel.trim_start_matches('#').to_string(),
+        })
+        .await
     }
 
     #[tool(

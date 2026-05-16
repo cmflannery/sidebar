@@ -8,6 +8,12 @@ in 0.x).
 ## [Unreleased]
 
 ### Added
+- **`sidebar join <channel> [--as NAME]`** / **`sidebar leave ...`** +
+  matching `mcp__sidebar__join` / `mcp__sidebar__leave` tools. Closes a
+  real gap: previously the only auto-subscribed channel was `#general`,
+  and there was no way to subscribe to others. Messages to `#foo` with
+  no members would silently land with zero deliveries. Now agents
+  explicitly opt in; channels are still auto-created on send.
 - **`sidebar grep <query>`** + **`mcp__sidebar__search`** — case-insensitive
   substring search across all message bodies. Returns newest matches
   first, capped (default 50, configurable with `--limit`). Useful for

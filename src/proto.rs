@@ -76,6 +76,15 @@ pub enum Op {
         include_stale: bool,
     },
     Channels,
+    /// Subscribe the calling agent to a channel (without leading `#`).
+    /// Creates the channel if it doesn't exist.
+    Join {
+        channel: String,
+    },
+    /// Unsubscribe the calling agent from a channel.
+    Leave {
+        channel: String,
+    },
     Pause,
     Resume,
     /// Switch this connection into event-forwarding mode. Any subsequent
