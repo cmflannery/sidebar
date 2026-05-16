@@ -3,9 +3,21 @@ name = "sidebar"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Local MCP server for inter-agent messaging and scheduling."
+description = "Local MCP server for inter-agent messaging and scheduling between coding agents (Claude Code, Codex, …)."
 license = "MIT"
 repository = "https://github.com/cmflannery/sidebar"
+homepage = "https://github.com/cmflannery/sidebar"
+documentation = "https://github.com/cmflannery/sidebar/blob/main/README.md"
+readme = "README.md"
+keywords = ["mcp", "agents", "messaging", "claude", "codex"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    ".github/",
+    "examples/",
+    "install/",
+    "tests/",
+    "*.log",
+]
 
 [dependencies]
 anyhow = "1"

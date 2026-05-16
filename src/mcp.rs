@@ -173,67 +173,65 @@ impl SidebarMcp {
 }
 
 impl SidebarMcp {
-    /// Send an Op to the daemon over the persistent socket; return a JSON
-    /// string the caller can parse, or a human-readable error.
+    /// Send an Op to the daemon and return a JSON-encoded string the caller
+    /// can parse. On any error (daemon down, serialization, etc.) returns a
+    /// shape like `{"ok":false,"error":"..."}` so callers get a consistent
+    /// envelope.
     async fn call(&self, op: Op) -> String {
+        match self.call_inner(op).await {
+            Ok(value) => value.to_string(),
+            Err(e) => err_json(&e.to_string()),
+        }
+    }
+
+    async fn call_inner(&self, op: Op) -> Result<serde_json::Value> {
         let mut guard = self.client.lock().await;
         if guard.is_none() {
             // Reconnecting after a drop — we want the daemon to assign us
             // the same name we held before if it's free, so pass our
             // current `agent_name` (which may itself be a suffixed form).
-            match Client::connect_mcp(&self.agent_name, env!("CARGO_PKG_VERSION")).await {
-                Ok(c) => *guard = Some(c),
-                Err(e) => {
-                    return serde_json::json!({
-                        "ok": false,
-                        "error": format!("sidebar daemon not reachable: {e}. Start it with `sidebar serve`.")
-                    })
-                    .to_string();
-                }
-            }
+            let client = Client::connect_mcp(&self.agent_name, env!("CARGO_PKG_VERSION"))
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "sidebar daemon not reachable: {e}. Start it with `sidebar serve`."
+                    )
+                })?;
+            *guard = Some(client);
         }
         let client = guard.as_mut().expect("connected above");
-        match client.request(op).await {
-            Ok(resp) => {
-                if resp.ok {
-                    match &resp.data {
-                        Some(ResponseData::SendOk { message_id }) => {
-                            serde_json::json!({ "ok": true, "message_id": message_id }).to_string()
-                        }
-                        Some(ResponseData::Messages { messages }) => {
-                            serde_json::to_string(&serde_json::json!({
-                                "ok": true,
-                                "messages": messages.iter().map(format_message).collect::<Vec<_>>()
-                            }))
-                            .unwrap_or_else(|e| format!("{{\"ok\":false,\"error\":\"{e}\"}}"))
-                        }
-                        Some(ResponseData::Agents { agents }) => {
-                            serde_json::json!({ "ok": true, "agents": agents }).to_string()
-                        }
-                        Some(ResponseData::Channels { channels }) => {
-                            serde_json::json!({ "ok": true, "channels": channels }).to_string()
-                        }
-                        Some(ResponseData::Status(s)) => {
-                            serde_json::to_string(&serde_json::json!({ "ok": true, "status": s }))
-                                .unwrap_or_else(|e| format!("{{\"ok\":false,\"error\":\"{e}\"}}"))
-                        }
-                        None => serde_json::json!({ "ok": true }).to_string(),
-                    }
-                } else {
-                    serde_json::json!({
-                        "ok": false,
-                        "error": resp.error.unwrap_or_else(|| "unknown error".into()),
-                    })
-                    .to_string()
-                }
-            }
-            Err(e) => {
-                // Connection probably broken — drop it so the next call retries.
-                *guard = None;
-                serde_json::json!({ "ok": false, "error": e.to_string() }).to_string()
-            }
+        let resp = client.request(op).await?;
+        if !resp.ok {
+            anyhow::bail!(resp.error.unwrap_or_else(|| "unknown daemon error".into()));
         }
+        Ok(format_response_data(resp.data.as_ref()))
     }
+}
+
+/// Render a `ResponseData` as the JSON shape that tool callers see.
+fn format_response_data(data: Option<&ResponseData>) -> serde_json::Value {
+    match data {
+        Some(ResponseData::SendOk { message_id }) => {
+            serde_json::json!({ "ok": true, "message_id": message_id })
+        }
+        Some(ResponseData::Messages { messages }) => serde_json::json!({
+            "ok": true,
+            "messages": messages.iter().map(format_message).collect::<Vec<_>>()
+        }),
+        Some(ResponseData::Agents { agents }) => {
+            serde_json::json!({ "ok": true, "agents": agents })
+        }
+        Some(ResponseData::Channels { channels }) => {
+            serde_json::json!({ "ok": true, "channels": channels })
+        }
+        Some(ResponseData::Status(s)) => serde_json::json!({ "ok": true, "status": s }),
+        None => serde_json::json!({ "ok": true }),
+    }
+}
+
+fn err_json(msg: &str) -> String {
+    // Round-trip through serde to escape correctly; fallback is well-formed JSON.
+    serde_json::json!({ "ok": false, "error": msg }).to_string()
 }
 
 fn format_message(m: &crate::types::Message) -> serde_json::Value {

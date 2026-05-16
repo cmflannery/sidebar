@@ -26,6 +26,16 @@ in 0.x).
 - `sidebar history` and `sidebar inbox` now print timestamps in local
   time (previously UTC), which is more useful for humans glancing at
   output.
+- Cargo.toml gained `keywords`, `categories`, `homepage`,
+  `documentation`, `readme`, and an `exclude` list. `cargo publish
+  --dry-run` succeeds (45 KB compressed).
+- `mcp.rs::call` refactored: split into `call` + `call_inner`, factored
+  out a `format_response_data` helper, replaced manual JSON-by-hand
+  fallbacks with `serde_json` so error strings escape correctly.
+
+### Added
+- `CONTRIBUTING.md` with build/test loop, conventions, scope, and a
+  short "good first issues" list.
 
 ## [0.3.0] – 2026-05-16
 
