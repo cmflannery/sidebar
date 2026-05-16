@@ -14,7 +14,7 @@ use tracing::info;
 use crate::paths;
 
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(3600);
-const SCHEDULER_TICK: Duration = Duration::from_millis(1000);
+const SCHEDULER_TICK: Duration = Duration::from_secs(1);
 
 /// Run the daemon until SIGINT/SIGTERM. Returns Ok(()) on clean shutdown.
 pub async fn serve() -> Result<()> {
