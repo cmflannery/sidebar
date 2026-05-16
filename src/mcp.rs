@@ -282,6 +282,13 @@ struct SidebarPollArgs {
     interval: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SidebarListenArgs {
+    /// Long-poll wait per inbox call — `30s`, `1m`, `5m`. Bare integers are
+    /// treated as minutes. Capped at 5 minutes (server-side inbox limit).
+    wait: String,
+}
+
 #[prompt_router(router = "prompt_router")]
 impl SidebarMcp {
     #[prompt(
@@ -297,7 +304,7 @@ impl SidebarMcp {
 
     #[prompt(
         name = "sidebar-poll",
-        description = "Set up a recurring inbox check via ScheduleWakeup. Pass an interval like `5` (minutes), `30s`, `5m`, `1h`."
+        description = "Claude Code: arm a recurring inbox check via ScheduleWakeup. Pass an interval like `5` (minutes), `30s`, `5m`, `1h`."
     )]
     async fn sidebar_poll(
         &self,
@@ -308,6 +315,30 @@ impl SidebarMcp {
             Some((human, secs)) => render_sidebar_poll(&human, secs),
             None => format!(
                 "The interval `{raw}` isn't a recognized format. Use values like `5` (minutes), `30s`, `5m`, `1h` (max 1 hour). Ask the user to re-run with a valid interval; do not call any tools or `ScheduleWakeup`."
+            ),
+        };
+        vec![PromptMessage::new_text(PromptMessageRole::User, body)]
+    }
+
+    #[prompt(
+        name = "sidebar-listen",
+        description = "Codex / any-MCP-client: stay attentive by long-polling the inbox in a loop. Pass a wait like `1m`, `5m`. Doesn't need ScheduleWakeup."
+    )]
+    async fn sidebar_listen(
+        &self,
+        Parameters(args): Parameters<SidebarListenArgs>,
+    ) -> Vec<PromptMessage> {
+        let raw = args.wait.trim();
+        let body = match parse_interval(raw) {
+            // Server caps inbox wait_ms at 5 minutes; reject anything larger here
+            // so the agent doesn't waste a tool call on a value the daemon would
+            // truncate silently.
+            Some((_, secs)) if secs > 300 => format!(
+                "Wait `{raw}` exceeds the 5-minute cap on `mcp__sidebar__inbox` long-polls. Use `5m` or smaller. Ask the user to re-run; do not call any tools."
+            ),
+            Some((human, secs)) => render_sidebar_listen(&human, secs),
+            None => format!(
+                "The wait `{raw}` isn't a recognized format. Use values like `30s`, `1m`, `5m` (max 5 minutes). Ask the user to re-run with a valid wait; do not call any tools."
             ),
         };
         vec![PromptMessage::new_text(PromptMessageRole::User, body)]
@@ -343,6 +374,29 @@ On every fire (including this one):\n\
 Stopping: if the user has just told you to \"stop checking sidebar\", \"stop the sidebar loop\", or \"pause sidebar polling\", do not call `ScheduleWakeup` on this fire. The loop dies because nothing re-armed it.\n\
 \n\
 If `mcp__sidebar__inbox` returns `{{\"ok\": false, ...}}`, mention the error briefly and still re-arm — the daemon may have restarted and the next fire will likely succeed."
+    )
+}
+
+fn render_sidebar_listen(human: &str, seconds: u64) -> String {
+    let wait_ms = seconds * 1000;
+    format!(
+        "You are running a sidebar listen session — staying attentive by long-polling the inbox.\n\
+\n\
+If this is the first call (no prior `whoami` yet), do these in one short message:\n\
+1. Call `mcp__sidebar__whoami` to confirm your name.\n\
+2. Call `mcp__sidebar__participants` to see who else is around.\n\
+3. Tell the user you're listening with {human} long-polls.\n\
+\n\
+Then enter the listen loop:\n\
+1. Call `mcp__sidebar__inbox` with `wait_ms`: {wait_ms}. The call blocks up to {human}.\n\
+2. When it returns:\n\
+   - For messages addressed to you (DMs, or `@<your-name>` in channel/broadcast), respond concisely. Stay quiet on other channel chatter unless it changes something the user cares about.\n\
+   - If `messages` is empty (poll timed out), that's fine — just proceed.\n\
+3. Immediately call `mcp__sidebar__inbox` again with the same `wait_ms`. Repeat until either:\n\
+   - The user tells you to stop (\"stop listening\", \"stop checking sidebar\", \"that's enough\").\n\
+   - Your turn budget runs out — the user can re-invoke `/mcp__sidebar__sidebar-listen {human}` to resume.\n\
+\n\
+This pattern doesn't need `ScheduleWakeup`; it works in Codex, Claude Code, and any other MCP-compatible client. If `inbox` returns `{{\"ok\": false, ...}}` (e.g. daemon restarted), mention the error briefly and keep looping — the next call will likely succeed."
     )
 }
 

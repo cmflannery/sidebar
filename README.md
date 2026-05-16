@@ -224,6 +224,12 @@ claude mcp add sidebar --scope user -- sh -c 'sidebar mcp --as "${SIDEBAR_AGENT_
 codex mcp add sidebar -- sidebar mcp --as codex
 ```
 
+The same three MCP prompts surface in Codex as `/mcp__sidebar__sidebar-start`,
+`sidebar-poll`, and `sidebar-listen`. Codex has no `ScheduleWakeup`
+equivalent, so **use `sidebar-listen` for the recurring case**:
+`/mcp__sidebar__sidebar-listen 5m` puts Codex into a long-poll loop
+that wakes on incoming messages and burns turn budget gracefully.
+
 ⚠️ Codex's default approval policy blocks MCP tool calls until the user
 confirms each one (`user cancelled MCP tool call`). For non-interactive
 use (e.g. `codex exec`) pass `--dangerously-bypass-approvals-and-sandbox`,
@@ -257,25 +263,33 @@ codex exec --dangerously-bypass-approvals-and-sandbox 'use sidebar to send "hi b
 Agents *don't* get woken up automatically when a message lands — that's a
 hard constraint of how CLI coding agents work. To make sidebar feel live,
 the agent needs to call `sidebar.inbox` on a cadence. The sidebar MCP
-server ships a built-in slash command for this — no file copying needed:
+server ships three built-in slash commands for this — no file copying:
 
 ```
-/mcp__sidebar__sidebar-start          # per-turn mode (no args)
-/mcp__sidebar__sidebar-poll 5         # scheduled: ScheduleWakeup every 5 minutes
+# universal — works in Claude Code, Codex, any MCP client
+/mcp__sidebar__sidebar-start          # bootstrap: check inbox each turn (no args)
+
+# Claude Code (uses ScheduleWakeup):
+/mcp__sidebar__sidebar-poll 5         # fires every 5 minutes via ScheduleWakeup
 /mcp__sidebar__sidebar-poll 30s       # tighter cadence for live multi-agent work
-/mcp__sidebar__sidebar-poll 1h        # quiet background watcher
+/mcp__sidebar__sidebar-poll 1h        # quiet background watcher; max 1h
+
+# Codex / any client without ScheduleWakeup:
+/mcp__sidebar__sidebar-listen 1m      # long-poll inbox(wait_ms=60000) in a loop
+/mcp__sidebar__sidebar-listen 5m      # max wait — server caps inbox long-polls at 5m
 ```
 
-Bare integers are treated as minutes; explicit `s` / `m` / `h` suffixes
-work too. `sidebar-poll` arms a `ScheduleWakeup` that re-runs the same
-prompt after the interval. Each fire reads the inbox, responds to
-anything directed at the agent, then re-arms. Cap is 1 hour. Tell the
-agent "stop checking sidebar" to drop the re-arm — the loop dies on the
-next fire because nothing scheduled it.
+Bare integers are minutes; explicit `s` / `m` / `h` suffixes work too.
 
-Codex doesn't have `ScheduleWakeup`, so its variant is the long-poll
-pattern: ask Codex to call `sidebar.inbox` with `wait_ms=60000` in a
-loop.
+- **`sidebar-poll`** arms a `ScheduleWakeup` that re-runs the same prompt
+  after the interval. Each fire reads the inbox, responds, then re-arms.
+  Claude Code only (Codex doesn't have ScheduleWakeup).
+- **`sidebar-listen`** doesn't need ScheduleWakeup — the agent calls
+  `inbox(wait_ms=N)` in a tight loop. Each call blocks up to N
+  milliseconds until a message arrives. Burns turn budget while
+  attentive; the user can re-invoke to resume after exhaustion.
+
+Tell the agent "stop checking sidebar" to break out of either pattern.
 
 ## Architecture (one paragraph)
 

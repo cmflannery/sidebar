@@ -37,26 +37,53 @@ fn paint(prefix: &str, s: &str) -> String {
 }
 
 // Per-name colors so each agent reads distinctly in the tail. Stable hash
-// over the bytes so a given name always picks the same slot; palette skips
-// red (reserved for errors) and plain white/gray (used for dim text).
-const NAME_PALETTE: &[&str] = &[
-    "\x1b[32m", // green
-    "\x1b[33m", // yellow
-    "\x1b[34m", // blue
-    "\x1b[35m", // magenta
-    "\x1b[36m", // cyan
-    "\x1b[92m", // bright green
-    "\x1b[94m", // bright blue
-    "\x1b[95m", // bright magenta
-    "\x1b[96m", // bright cyan
-];
-fn name_color(name: &str) -> &'static str {
+// over the bytes picks a hue on the color wheel, emitted as truecolor —
+// scales to arbitrarily many agents (collisions become near-miss hues
+// instead of identical palette slots). Hues near pure red (0°/360°) are
+// skipped so we don't visually clash with error red.
+fn name_color(name: &str) -> String {
+    // FNV-1a, then a finalize pass — FNV's high bits mix poorly on short
+    // ASCII, so without the avalanche the modulo distribution skews badly
+    // (every "claude-*" lands on the same hue).
     let mut h: u32 = 2_166_136_261;
     for b in name.bytes() {
         h ^= u32::from(b);
         h = h.wrapping_mul(16_777_619);
     }
-    NAME_PALETTE[(h as usize) % NAME_PALETTE.len()]
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+
+    // Map to a 320° arc starting at 20° (skip the ±20° wedge around red).
+    let hue_deg: u16 = 20 + u16::try_from(h % 320).unwrap_or(0);
+    let (r, g, b) = hsl_to_rgb(hue_deg, 0.62, 0.62);
+    format!("\x1b[38;2;{r};{g};{b}m")
+}
+// HSL→RGB with saturation/lightness in [0,1] and hue in degrees ∈ [0, 360).
+// Standard formula; variable names follow Wikipedia's `Hsl_and_hsv` page.
+fn hsl_to_rgb(hue_deg: u16, sat: f32, light: f32) -> (u8, u8, u8) {
+    let chroma = (1.0 - (2.0 * light - 1.0).abs()) * sat;
+    // Sector picked from integer math so we dodge f32→u32 cast lints.
+    let sector = (hue_deg / 60) % 6;
+    let hue_prime = f32::from(hue_deg) / 60.0;
+    let second = chroma * (1.0 - (hue_prime.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match sector {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let lightness_shift = light - chroma / 2.0;
+    // Value is clamped to [0, 255] before the cast — narrow allow with reason.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "value is clamped to [0, 255] immediately before the cast"
+    )]
+    let to_u8 = |v: f32| ((v + lightness_shift) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (to_u8(r1), to_u8(g1), to_u8(b1))
 }
 fn paint_name(name: &str) -> String {
     if use_color() {
