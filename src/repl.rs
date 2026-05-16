@@ -92,6 +92,105 @@ fn paint_name(name: &str) -> String {
         format!("@{name}")
     }
 }
+// Minimal markdown renderer for message bodies. Covers what people actually
+// type into chat:
+//   `code`           inline code         — magenta
+//   **bold**         bold                — ANSI bold
+//   ```...```        fenced code block   — dim, lightly indented
+//   [text](url)      link                — underlined text, URL dropped
+// Skips emphasis (single `*`), headings, lists, tables — chat doesn't use
+// them and they'd be jarring inline. NO_COLOR / non-TTY: returns input
+// unchanged so terminal recordings stay clean.
+const UNDERLINE: &str = "\x1b[4m";
+const MAGENTA: &str = "\x1b[35m";
+fn render_markdown(body: &str) -> String {
+    render_markdown_inner(body, use_color())
+}
+
+fn render_markdown_inner(body: &str, color: bool) -> String {
+    if !color {
+        return body.to_string();
+    }
+    let paint = |prefix: &str, s: &str| format!("{prefix}{s}{RESET}");
+    let chars: Vec<char> = body.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        // Triple-backtick fenced block (greedy, multi-line).
+        if i + 3 <= chars.len() && chars[i..i + 3] == ['`', '`', '`'] {
+            if let Some(end) = find_run(&chars, i + 3, '`', 3) {
+                let inner: String = chars[i + 3..end].iter().collect();
+                let trimmed = inner.trim_matches('\n');
+                out.push('\n');
+                for line in trimmed.lines() {
+                    out.push_str(&paint(DIM, &format!("    {line}")));
+                    out.push('\n');
+                }
+                i = end + 3;
+                continue;
+            }
+        }
+        // Inline `code`.
+        if chars[i] == '`' {
+            if let Some(end) = find_char(&chars, i + 1, '`') {
+                let inner: String = chars[i + 1..end].iter().collect();
+                out.push_str(&paint(MAGENTA, &inner));
+                i = end + 1;
+                continue;
+            }
+        }
+        // **bold**.
+        if i + 2 <= chars.len() && chars[i..i + 2] == ['*', '*'] {
+            if let Some(end) = find_run(&chars, i + 2, '*', 2) {
+                let inner: String = chars[i + 2..end].iter().collect();
+                out.push_str(&paint(BOLD, &inner));
+                i = end + 2;
+                continue;
+            }
+        }
+        // [text](url) → underlined text, URL hidden.
+        if chars[i] == '[' {
+            if let Some(close_bracket) = find_char(&chars, i + 1, ']') {
+                if close_bracket + 1 < chars.len() && chars[close_bracket + 1] == '(' {
+                    if let Some(close_paren) = find_char(&chars, close_bracket + 2, ')') {
+                        let text: String = chars[i + 1..close_bracket].iter().collect();
+                        out.push_str(&paint(UNDERLINE, &text));
+                        i = close_paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Escape: \` \* \[ — emit the literal next char without re-parsing.
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            out.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn find_char(chars: &[char], from: usize, target: char) -> Option<usize> {
+    chars[from..]
+        .iter()
+        .position(|&c| c == target)
+        .map(|p| from + p)
+}
+
+fn find_run(chars: &[char], from: usize, target: char, n: usize) -> Option<usize> {
+    let mut i = from;
+    while i + n <= chars.len() {
+        if chars[i..i + n].iter().all(|&c| c == target) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 fn recipient_suffix(r: &Recipient) -> String {
     match r {
         Recipient::Channel(n) => paint(DIM, &format!("  (#{n})")),
@@ -779,8 +878,9 @@ async fn tail_loop(printer: &mut (impl ExternalPrinter + Send)) -> Result<()> {
         let ts = paint(DIM, &format!("[{now}]"));
         let rendered = match evt {
             Event::Message { to, from, body, .. } => format!(
-                "{ts} {}: {body}{}\n",
+                "{ts} {}: {}{}\n",
                 paint_name(&from),
+                render_markdown(&body),
                 recipient_suffix(&to)
             ),
             Event::Paused => format!("{ts} {}\n", paint(YELLOW, "(paused)")),
@@ -802,7 +902,7 @@ fn print_message_line(m: &crate::types::Message) {
         "{} {}: {}{}",
         paint(DIM, &format!("[{ts}]")),
         paint_name(&m.from),
-        m.body,
+        render_markdown(&m.body),
         recipient_suffix(&m.to),
     );
 }
@@ -874,4 +974,57 @@ async fn ensure_daemon() -> Result<()> {
         exe.display(),
         socket.display(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_color_passthrough() {
+        assert_eq!(render_markdown_inner("hello **world**", false), "hello **world**");
+    }
+
+    #[test]
+    fn inline_code_is_magenta() {
+        let out = render_markdown_inner("run `sidebar serve` now", true);
+        assert!(out.contains("\x1b[35msidebar serve\x1b[0m"), "got: {out:?}");
+    }
+
+    #[test]
+    fn bold_is_bolded() {
+        let out = render_markdown_inner("the **important** bit", true);
+        assert!(out.contains("\x1b[1mimportant\x1b[0m"), "got: {out:?}");
+    }
+
+    #[test]
+    fn link_text_is_underlined_url_hidden() {
+        let out = render_markdown_inner("see [docs](https://example.com) here", true);
+        assert!(out.contains("\x1b[4mdocs\x1b[0m"), "got: {out:?}");
+        assert!(!out.contains("example.com"), "url should be hidden: {out:?}");
+    }
+
+    #[test]
+    fn fenced_block_each_line_dim_indented() {
+        let out = render_markdown_inner("before\n```\nline1\nline2\n```\nafter", true);
+        assert!(out.contains("\x1b[2m    line1\x1b[0m"), "got: {out:?}");
+        assert!(out.contains("\x1b[2m    line2\x1b[0m"), "got: {out:?}");
+    }
+
+    #[test]
+    fn unclosed_backtick_left_alone() {
+        let out = render_markdown_inner("a ` lonely backtick", true);
+        assert_eq!(out, "a ` lonely backtick");
+    }
+
+    #[test]
+    fn escaped_backtick_renders_literal() {
+        let out = render_markdown_inner(r"escaped \` here", true);
+        assert_eq!(out, "escaped ` here");
+    }
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(render_markdown_inner("", true), "");
+    }
 }
