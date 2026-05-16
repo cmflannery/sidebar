@@ -147,6 +147,9 @@ pub enum Command {
     Prune {
         #[arg(long, default_value_t = 30)]
         inactive_days: i64,
+        /// List what would be pruned without deleting.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Hold new message delivery.

@@ -608,6 +608,32 @@ impl Store {
         .await?
     }
 
+    /// Identify agents prunable under the same criteria as
+    /// `prune_inactive_agents` — for `--dry-run`.
+    pub async fn prunable_agents(&self, inactive_days: i64) -> Result<Vec<String>> {
+        let conn = self.conn.clone();
+        let cutoff = Utc::now() - chrono::Duration::days(inactive_days);
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let conn = conn.blocking_lock();
+            let cutoff_str = cutoff.to_rfc3339();
+            let mut stmt = conn.prepare(
+                "SELECT name FROM agents
+                 WHERE name != 'master'
+                   AND last_seen < ?1
+                   AND id NOT IN (SELECT DISTINCT from_agent FROM messages)
+                   AND id NOT IN (
+                     SELECT to_agent FROM messages WHERE to_agent IS NOT NULL
+                   )
+                 ORDER BY name",
+            )?;
+            let rows = stmt
+                .query_map(params![cutoff_str], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await?
+    }
+
     /// Delete agents that haven't been seen in `inactive_days` AND have
     /// zero messages either from or to them. Master and the seed agents
     /// are never touched. Returns the number of agent rows removed.

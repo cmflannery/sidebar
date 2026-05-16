@@ -577,7 +577,10 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|messages| ResponseData::Messages { messages })
         }
-        Op::Prune { inactive_days } => {
+        Op::Prune {
+            inactive_days,
+            dry_run,
+        } => {
             if inactive_days < 1 {
                 return Response {
                     id,
@@ -586,13 +589,21 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                     data: None,
                 };
             }
-            daemon
-                .store
-                .prune_inactive_agents(inactive_days)
-                .await
-                .map(|count| ResponseData::SendOk {
-                    message_id: i64::try_from(count).unwrap_or(i64::MAX),
-                })
+            if dry_run {
+                daemon
+                    .store
+                    .prunable_agents(inactive_days)
+                    .await
+                    .map(|agents| ResponseData::Agents { agents })
+            } else {
+                daemon
+                    .store
+                    .prune_inactive_agents(inactive_days)
+                    .await
+                    .map(|count| ResponseData::SendOk {
+                        message_id: i64::try_from(count).unwrap_or(i64::MAX),
+                    })
+            }
         }
         Op::Pause => {
             daemon.paused.store(true, Ordering::Release);

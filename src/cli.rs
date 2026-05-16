@@ -41,7 +41,10 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Grep { query, limit, json } => grep(query, limit, json).await,
         Command::Join { channel, as_name } => join(channel, as_name).await,
         Command::Leave { channel, as_name } => leave(channel, as_name).await,
-        Command::Prune { inactive_days } => prune(inactive_days).await,
+        Command::Prune {
+            inactive_days,
+            dry_run,
+        } => prune(inactive_days, dry_run).await,
         Command::Pause => pause().await,
         Command::Resume => resume().await,
         Command::Status { json } => status(json).await,
@@ -440,13 +443,35 @@ async fn history(
     print_messages(&messages, json)
 }
 
-async fn prune(inactive_days: i64) -> Result<()> {
+async fn prune(inactive_days: i64, dry_run: bool) -> Result<()> {
     let mut client = Client::connect_as("master").await?;
-    let resp = client.request(Op::Prune { inactive_days }).await?;
+    let resp = client
+        .request(Op::Prune {
+            inactive_days,
+            dry_run,
+        })
+        .await?;
     if !resp.ok {
         anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
     }
-    if let Some(ResponseData::SendOk { message_id: count }) = resp.data {
+    if dry_run {
+        match resp.data {
+            Some(ResponseData::Agents { agents }) => {
+                if agents.is_empty() {
+                    println!("(no inactive agents would be pruned)");
+                } else {
+                    println!(
+                        "would prune {} agent(s) (use without --dry-run to apply):",
+                        agents.len()
+                    );
+                    for a in agents {
+                        println!("  {a}");
+                    }
+                }
+            }
+            other => anyhow::bail!("unexpected response: {other:?}"),
+        }
+    } else if let Some(ResponseData::SendOk { message_id: count }) = resp.data {
         println!("pruned {count} inactive agent(s)");
     }
     Ok(())

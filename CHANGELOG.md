@@ -74,13 +74,13 @@ in 0.x).
   `Recipient::parse` also now trims leading/trailing whitespace.
 
 ### Added
-- **`sidebar prune [--inactive-days N]`** (default 30) drops agent rows
-  that haven't been seen in N days AND have no messages either from or
-  to them. Master is never pruned. Useful for cleaning up typo'd
-  `@mention` ghosts and registrations that did nothing. Agents with
-  messages are always preserved — those would orphan FKs.
-  Exposed via `Op::Prune`; the response carries the count in the
-  existing `message_id` field for compatibility.
+- **`sidebar prune [--inactive-days N] [--dry-run]`** (default 30) drops
+  agent rows that haven't been seen in N days AND have no messages
+  either from or to them. Master is never pruned. Useful for cleaning
+  up typo'd `@mention` ghosts and registrations that did nothing.
+  Agents with messages are always preserved — those would orphan FKs.
+  `--dry-run` lists what would be pruned without deleting.
+  Exposed via `Op::Prune { inactive_days, dry_run }`.
 - **`sidebar channels [--details] [--json]`** — finally a CLI counterpart
   to the existing MCP `channels` tool. Plain mode lists channel names;
   `--details` adds a table with member counts and last-activity time.

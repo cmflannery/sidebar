@@ -450,8 +450,18 @@ fn prune_removes_ghost_agents_only() {
         .output()
         .expect("sqlite3 backdate");
 
-    // Prune with 1-day cutoff. Should drop ghost only — chatty has
-    // delivery rows pointing at them (to_agent), master is exempt.
+    // --dry-run lists ghost and doesn't delete.
+    let dry = sb.stdout(&["prune", "--inactive-days", "1", "--dry-run"]);
+    assert!(dry.contains("would prune 1"), "dry-run wrong count: {dry}");
+    assert!(dry.contains("ghost"), "dry-run didn't name ghost: {dry}");
+    assert!(!dry.contains("chatty"), "dry-run included chatty: {dry}");
+    let still_there = sb.stdout(&["participants"]);
+    assert!(
+        still_there.contains("ghost"),
+        "dry-run actually deleted: {still_there}"
+    );
+
+    // Real prune: drops ghost only.
     let out = sb.stdout(&["prune", "--inactive-days", "1"]);
     assert!(out.contains("pruned 1"), "expected 1 pruned, got: {out}");
 

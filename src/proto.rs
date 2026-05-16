@@ -107,10 +107,13 @@ pub enum Op {
         limit: usize,
     },
     /// Delete agents inactive for `inactive_days` who have no messages
-    /// either from or to them. Master and active agents are never touched.
+    /// either from or to them. When `dry_run` is true, return the agent
+    /// names that would be pruned without actually deleting.
     Prune {
         #[serde(default = "default_prune_days")]
         inactive_days: i64,
+        #[serde(default)]
+        dry_run: bool,
     },
 }
 
