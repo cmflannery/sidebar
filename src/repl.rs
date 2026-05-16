@@ -27,13 +27,49 @@ const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const CYAN: &str = "\x1b[36m";
-const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 fn paint(prefix: &str, s: &str) -> String {
     if use_color() {
         format!("{prefix}{s}{RESET}")
     } else {
         s.to_string()
+    }
+}
+
+// Per-name colors so each agent reads distinctly in the tail. Stable hash
+// over the bytes so a given name always picks the same slot; palette skips
+// red (reserved for errors) and plain white/gray (used for dim text).
+const NAME_PALETTE: &[&str] = &[
+    "\x1b[32m", // green
+    "\x1b[33m", // yellow
+    "\x1b[34m", // blue
+    "\x1b[35m", // magenta
+    "\x1b[36m", // cyan
+    "\x1b[92m", // bright green
+    "\x1b[94m", // bright blue
+    "\x1b[95m", // bright magenta
+    "\x1b[96m", // bright cyan
+];
+fn name_color(name: &str) -> &'static str {
+    let mut h: u32 = 2_166_136_261;
+    for b in name.bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(16_777_619);
+    }
+    NAME_PALETTE[(h as usize) % NAME_PALETTE.len()]
+}
+fn paint_name(name: &str) -> String {
+    if use_color() {
+        format!("{BOLD}{}@{name}{RESET}", name_color(name))
+    } else {
+        format!("@{name}")
+    }
+}
+fn recipient_suffix(r: &Recipient) -> String {
+    match r {
+        Recipient::Channel(n) => paint(DIM, &format!("  (#{n})")),
+        Recipient::Broadcast => paint(DIM, "  (broadcast)"),
+        Recipient::Agent(_) => String::new(),
     }
 }
 
@@ -62,7 +98,8 @@ pub async fn run(identity: String) -> Result<()> {
 
     loop {
         let prompt = if use_color() {
-            format!("{BOLD}{GREEN}{current}{RESET}{DIM} ❯ {RESET}")
+            let c = name_color(&current);
+            format!("{BOLD}{c}{current}{RESET}{DIM} ❯ {RESET}")
         } else {
             format!("{current}> ")
         };
@@ -113,7 +150,7 @@ fn print_banner(current: &str) {
     );
     println!(
         "connected as {}. {} for commands. naked text → {}. {} to quit.",
-        paint(&format!("{BOLD}{GREEN}"), current),
+        paint_name(current),
         paint(BOLD, "/help"),
         paint(BOLD, "#general"),
         paint(BOLD, "^D"),
@@ -681,11 +718,7 @@ async fn tail_loop(printer: &mut (impl ExternalPrinter + Send)) -> Result<()> {
         let rendered = match evt {
             Event::Message {
                 to, from, body, ..
-            } => {
-                let from = paint(&format!("{BOLD}{GREEN}"), &from);
-                let to = paint(CYAN, &recipient_label(&to));
-                format!("{ts} {from} → {to}: {body}\n")
-            }
+            } => format!("{ts} {}: {body}{}\n", paint_name(&from), recipient_suffix(&to)),
             Event::Paused => format!("{ts} {}\n", paint(YELLOW, "(paused)")),
             Event::Resumed => format!("{ts} {}\n", paint(YELLOW, "(resumed)")),
         };
@@ -702,11 +735,11 @@ fn print_message_line(m: &crate::types::Message) {
         .with_timezone(&chrono::Local)
         .format("%H:%M:%S");
     println!(
-        "{} {} → {}: {}",
+        "{} {}: {}{}",
         paint(DIM, &format!("[{ts}]")),
-        paint(&format!("{BOLD}{GREEN}"), &m.from),
-        paint(CYAN, &recipient_label(&m.to)),
-        m.body
+        paint_name(&m.from),
+        m.body,
+        recipient_suffix(&m.to),
     );
 }
 
