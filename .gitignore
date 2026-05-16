@@ -1,1 +1,4 @@
 /target
+
+# Claude Code session state
+.claude/
