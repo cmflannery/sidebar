@@ -142,6 +142,23 @@ pub enum Command {
         as_name: String,
     },
 
+    /// List pending scheduled messages (master sees all; --as <name>
+    /// scopes to that agent's own).
+    Scheduled {
+        #[arg(long = "as", default_value = "master")]
+        as_name: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Cancel a pending scheduled message by id. Master can cancel any;
+    /// otherwise --as must match the agent that scheduled it.
+    Cancel {
+        scheduled_id: i64,
+        #[arg(long = "as", default_value = "master")]
+        as_name: String,
+    },
+
     /// Drop agent rows inactive for N days that have no messages either
     /// from or to them. Master is never pruned.
     Prune {

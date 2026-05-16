@@ -92,6 +92,12 @@ fn default_search_limit() -> usize {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CancelArgs {
+    /// Id of the scheduled row to cancel.
+    scheduled_id: i64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ScheduleArgs {
     /// Recipient: `@agent`, `#channel`, or `*`.
     to: String,
@@ -180,6 +186,23 @@ impl SidebarMcp {
         self.call(Op::Search {
             query: args.query,
             limit: args.limit,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "List the calling agent's pending scheduled messages with id, deliver_at, recipient, and body. Use `cancel` to undo one before it fires."
+    )]
+    async fn scheduled(&self) -> String {
+        self.call(Op::Scheduled).await
+    }
+
+    #[tool(
+        description = "Cancel a pending scheduled message by its id (from `scheduled` or the response of `schedule`). Only the caller who scheduled it can cancel."
+    )]
+    async fn cancel(&self, Parameters(args): Parameters<CancelArgs>) -> String {
+        self.call(Op::Cancel {
+            scheduled_id: args.scheduled_id,
         })
         .await
     }
@@ -285,6 +308,9 @@ fn format_response_data(data: Option<&ResponseData>) -> serde_json::Value {
             serde_json::json!({ "ok": true, "channels": channels_detailed })
         }
         Some(ResponseData::Status(s)) => serde_json::json!({ "ok": true, "status": s }),
+        Some(ResponseData::Scheduled { scheduled }) => {
+            serde_json::json!({ "ok": true, "scheduled": scheduled })
+        }
         None => serde_json::json!({ "ok": true }),
     }
 }

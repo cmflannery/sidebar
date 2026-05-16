@@ -115,6 +115,14 @@ pub enum Op {
         #[serde(default)]
         dry_run: bool,
     },
+    /// List pending scheduled messages. Master sees all; other callers
+    /// see only their own.
+    Scheduled,
+    /// Cancel a pending scheduled message. Master can cancel any;
+    /// non-master agents can only cancel their own.
+    Cancel {
+        scheduled_id: i64,
+    },
 }
 
 fn default_prune_days() -> i64 {
@@ -168,6 +176,19 @@ pub enum ResponseData {
         channels_detailed: Vec<ChannelDetails>,
     },
     Status(StatusInfo),
+    Scheduled {
+        scheduled: Vec<ScheduledRow>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledRow {
+    pub id: i64,
+    pub from: String,
+    pub to: String,
+    pub body: String,
+    pub deliver_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

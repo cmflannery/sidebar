@@ -80,6 +80,15 @@ in 0.x).
   `Recipient::parse` also now trims leading/trailing whitespace.
 
 ### Added
+- **`sidebar scheduled [--as NAME]`** + **`sidebar cancel <id>`** +
+  matching `mcp__sidebar__scheduled` / `mcp__sidebar__cancel` tools.
+  Pending scheduled rows were stored in the DB with no way to see or
+  stop them; `status` showed only the count. Now:
+  - `sidebar scheduled` lists pending rows (master sees all; other
+    callers see only their own).
+  - `sidebar cancel <id>` flips `status` from `pending` to
+    `cancelled`. Master can cancel any; other callers only their own.
+  Test `cancel_respects_ownership` locks the ownership semantics.
 - **`sidebar prune [--inactive-days N] [--dry-run]`** (default 30) drops
   agent rows that haven't been seen in N days AND have no messages
   either from or to them. Master is never pruned. Useful for cleaning

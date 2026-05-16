@@ -284,6 +284,64 @@ fn grep_rejects_excessive_query_length_and_limit() {
 }
 
 #[test]
+fn scheduled_list_and_cancel() {
+    let sb = Sandbox::new();
+
+    // Master queues two reminders ~1 hour out.
+    sb.stdout(&["schedule", "--to", "@alpha", "--in", "3600", "remind alpha"]);
+    sb.stdout(&["schedule", "--to", "@beta", "--in", "3600", "remind beta"]);
+
+    let listed = sb.stdout(&["scheduled"]);
+    assert!(
+        listed.contains("remind alpha"),
+        "missing alpha row: {listed}"
+    );
+    assert!(listed.contains("remind beta"), "missing beta row: {listed}");
+
+    // Cancel id 1.
+    let cancel = sb.stdout(&["cancel", "1"]);
+    assert!(cancel.contains("cancelled"), "wrong msg: {cancel}");
+
+    // Now only the second remains.
+    let after = sb.stdout(&["scheduled"]);
+    assert!(
+        !after.contains("remind alpha"),
+        "alpha still listed: {after}"
+    );
+    assert!(after.contains("remind beta"), "beta missing: {after}");
+
+    // Cancelling a non-existent id errors.
+    let bad = sb.run(&["cancel", "999"]);
+    assert!(!bad.status.success(), "cancel 999 should fail");
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(err.contains("not found"), "wrong error: {err}");
+}
+
+#[test]
+fn cancel_respects_ownership() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@alice", "create alice"]);
+
+    // master schedules something.
+    sb.stdout(&[
+        "schedule",
+        "--to",
+        "@bob",
+        "--in",
+        "3600",
+        "master's reminder",
+    ]);
+
+    // alice tries to cancel id 1 (which master scheduled).
+    let bad = sb.run(&["cancel", "1", "--as", "alice"]);
+    assert!(!bad.status.success(), "alice shouldn't cancel master's row");
+
+    // master can still cancel it.
+    let ok = sb.stdout(&["cancel", "1"]);
+    assert!(ok.contains("cancelled"));
+}
+
+#[test]
 fn schedule_rejects_unreasonable_future() {
     let sb = Sandbox::new();
     // Two years out (in seconds) — beyond the 365-day cap.

@@ -41,6 +41,11 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Grep { query, limit, json } => grep(query, limit, json).await,
         Command::Join { channel, as_name } => join(channel, as_name).await,
         Command::Leave { channel, as_name } => leave(channel, as_name).await,
+        Command::Scheduled { as_name, json } => scheduled(as_name, json).await,
+        Command::Cancel {
+            scheduled_id,
+            as_name,
+        } => cancel(scheduled_id, as_name).await,
         Command::Prune {
             inactive_days,
             dry_run,
@@ -441,6 +446,45 @@ async fn history(
         anyhow::bail!("unexpected response: {resp:?}");
     };
     print_messages(&messages, json)
+}
+
+async fn scheduled(as_name: String, json: bool) -> Result<()> {
+    let mut client = Client::connect_as(&as_name).await?;
+    let resp = client.request(Op::Scheduled).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    let Some(ResponseData::Scheduled { scheduled }) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    if json {
+        println!("{}", serde_json::to_string(&scheduled)?);
+        return Ok(());
+    }
+    if scheduled.is_empty() {
+        println!("(no pending scheduled messages)");
+        return Ok(());
+    }
+    println!("ID    FIRES                       FROM → TO         BODY");
+    for s in scheduled {
+        let when = s
+            .deliver_at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S");
+        let body_preview: String = s.body.chars().take(40).collect();
+        println!("{:<5} {when}  {} → {}  {body_preview}", s.id, s.from, s.to);
+    }
+    Ok(())
+}
+
+async fn cancel(scheduled_id: i64, as_name: String) -> Result<()> {
+    let mut client = Client::connect_as(&as_name).await?;
+    let resp = client.request(Op::Cancel { scheduled_id }).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    println!("cancelled scheduled id {scheduled_id}");
+    Ok(())
 }
 
 async fn prune(inactive_days: i64, dry_run: bool) -> Result<()> {

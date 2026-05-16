@@ -616,6 +616,82 @@ impl Store {
         .await?
     }
 
+    /// List pending scheduled rows. If `only_for_agent` is set, returns
+    /// only rows where the payload's `from` matches that name. Ordered
+    /// by deliver_at ascending (soonest first).
+    pub async fn list_scheduled(
+        &self,
+        only_for_agent: Option<&str>,
+    ) -> Result<Vec<crate::proto::ScheduledRow>> {
+        let conn = self.conn.clone();
+        let filter = only_for_agent.map(str::to_string);
+        tokio::task::spawn_blocking(move || -> Result<Vec<crate::proto::ScheduledRow>> {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, payload, deliver_at, created_at
+                 FROM scheduled
+                 WHERE status = 'pending'
+                   AND (?1 IS NULL OR json_extract(payload, '$.from') = ?1)
+                 ORDER BY deliver_at ASC, id ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![filter], |r| {
+                    let id: i64 = r.get(0)?;
+                    let payload_json: String = r.get(1)?;
+                    let deliver_at = parse_ts(&r.get::<_, String>(2)?);
+                    let created_at = parse_ts(&r.get::<_, String>(3)?);
+                    Ok((id, payload_json, deliver_at, created_at))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let mut out = Vec::with_capacity(rows.len());
+            for (id, payload_json, deliver_at, created_at) in rows {
+                let payload: ScheduledPayload = match serde_json::from_str(&payload_json) {
+                    Ok(p) => p,
+                    Err(_) => continue, // skip malformed
+                };
+                out.push(crate::proto::ScheduledRow {
+                    id,
+                    from: payload.from,
+                    to: payload.to,
+                    body: payload.body,
+                    deliver_at,
+                    created_at,
+                });
+            }
+            Ok(out)
+        })
+        .await?
+    }
+
+    /// Cancel a pending scheduled row. Master can cancel any row;
+    /// non-master callers can only cancel rows where the payload's
+    /// `from` matches their name. Returns true if a row was cancelled,
+    /// false otherwise.
+    pub async fn cancel_scheduled(&self, scheduled_id: i64, requester: &str) -> Result<bool> {
+        let conn = self.conn.clone();
+        let requester = requester.to_string();
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let conn = conn.blocking_lock();
+            let updated = if requester == "master" {
+                conn.execute(
+                    "UPDATE scheduled SET status = 'cancelled'
+                     WHERE id = ?1 AND status = 'pending'",
+                    params![scheduled_id],
+                )?
+            } else {
+                conn.execute(
+                    "UPDATE scheduled SET status = 'cancelled'
+                     WHERE id = ?1 AND status = 'pending'
+                       AND json_extract(payload, '$.from') = ?2",
+                    params![scheduled_id, requester],
+                )?
+            };
+            Ok(updated > 0)
+        })
+        .await?
+    }
+
     /// Identify agents prunable under the same criteria as
     /// `prune_inactive_agents` — for `--dry-run`.
     pub async fn prunable_agents(&self, inactive_days: i64) -> Result<Vec<String>> {

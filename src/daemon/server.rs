@@ -577,6 +577,31 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|messages| ResponseData::Messages { messages })
         }
+        Op::Scheduled => {
+            let only = if agent_name == "master" {
+                None
+            } else {
+                Some(agent_name)
+            };
+            daemon
+                .store
+                .list_scheduled(only)
+                .await
+                .map(|scheduled| ResponseData::Scheduled { scheduled })
+        }
+        Op::Cancel { scheduled_id } => match daemon
+            .store
+            .cancel_scheduled(scheduled_id, agent_name)
+            .await
+        {
+            Ok(true) => Ok(ResponseData::SendOk {
+                message_id: scheduled_id,
+            }),
+            Ok(false) => Err(anyhow::anyhow!(
+                "scheduled id {scheduled_id} not found, already fired, or not yours to cancel"
+            )),
+            Err(e) => Err(e),
+        },
         Op::Prune {
             inactive_days,
             dry_run,
