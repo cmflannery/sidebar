@@ -14,6 +14,16 @@ in 0.x).
   with its `sha256` sum, and attaches them to the GitHub Release.
 
 ### Fixed
+- **Defense-in-depth: `ensure_agent_blocking` and `ensure_channel_blocking`
+  validate names before inserting.** Every dispatch path already
+  validates, but adding the check at the insert site too means a future
+  code path can't accidentally slip past. Existing rows are trusted
+  (skip the check on lookup) so users running on older sidebar versions
+  see no breakage from rows their previous binary may have written.
+- **Empty `SIDEBAR_HOME` env var** used to produce an obscure
+  "is a directory" or "not found" error downstream. Now `paths::home`
+  rejects it with `SIDEBAR_HOME is set but empty; unset it or set a
+  real path`. Same for empty `HOME`.
 - **Mentions could bypass the 64-char name cap.** `extract_mentions`
   fed names directly into `ensure_agent_blocking`, which trusts its
   input. Now mentions are filtered through `validate_name` before

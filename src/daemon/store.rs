@@ -785,18 +785,23 @@ fn ensure_agent_blocking(conn: &Connection, name: &str) -> Result<i64> {
         .optional()?;
 
     let id = if let Some(id) = existing {
+        // Existing rows are trusted — they were validated when inserted.
+        // Skipping the check here preserves backwards-compat with any
+        // pre-validation data left over from earlier sidebar versions.
         conn.execute(
             "UPDATE agents SET last_seen = ?1 WHERE id = ?2",
             params![now, id],
         )?;
         id
     } else {
+        // Defense-in-depth: every caller should have validated already,
+        // but enforce it here too so a future path can't slip in.
+        validate_name(name).map_err(|e| anyhow::anyhow!("invalid agent name `{name}`: {e}"))?;
         conn.execute(
             "INSERT INTO agents (name, first_seen, last_seen) VALUES (?1, ?2, ?2)",
             params![name, now],
         )?;
         let new_id = conn.last_insert_rowid();
-        // Auto-join #general.
         if let Ok(cid) = ensure_channel_blocking(conn, DEFAULT_CHANNEL) {
             conn.execute(
                 "INSERT OR IGNORE INTO memberships (agent_id, channel_id, joined_at)
@@ -821,6 +826,10 @@ fn ensure_channel_blocking(conn: &Connection, name: &str) -> Result<i64> {
     if let Some(id) = existing {
         return Ok(id);
     }
+    // Defense-in-depth: validate before inserting. Every caller already
+    // validates at the dispatch boundary; this stops a future code path
+    // from slipping past.
+    validate_name(name).map_err(|e| anyhow::anyhow!("invalid channel name `{name}`: {e}"))?;
     conn.execute(
         "INSERT INTO channels (name, created_at) VALUES (?1, ?2)",
         params![name, now],

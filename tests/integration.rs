@@ -158,6 +158,21 @@ fn join_rejects_overlong_channel_name() {
     assert!(!out.status.success(), "overlong channel name should fail");
 }
 
+#[test]
+fn empty_sidebar_home_env_var_errors_clearly() {
+    let out = Command::new(sidebar_bin())
+        .args(["participants"])
+        .env("SIDEBAR_HOME", "")
+        .output()
+        .expect("run participants");
+    assert!(!out.status.success(), "empty SIDEBAR_HOME should error");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("SIDEBAR_HOME is set but empty"),
+        "expected clear error, got: {err}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn home_dir_is_chmod_0700() {

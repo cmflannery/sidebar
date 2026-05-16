@@ -8,9 +8,15 @@ use anyhow::{Context, Result};
 
 pub fn home() -> Result<PathBuf> {
     if let Ok(v) = std::env::var("SIDEBAR_HOME") {
+        if v.is_empty() {
+            anyhow::bail!("SIDEBAR_HOME is set but empty; unset it or set a real path");
+        }
         return Ok(PathBuf::from(v));
     }
     let home = std::env::var("HOME").context("HOME not set")?;
+    if home.is_empty() {
+        anyhow::bail!("HOME is set but empty");
+    }
     Ok(PathBuf::from(home).join(".sidebar"))
 }
 
