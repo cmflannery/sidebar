@@ -328,9 +328,21 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
             (None, None) => Err(anyhow::anyhow!("history requires --channel or --with")),
         },
         Op::Subscribe => Ok(ResponseData::SendOk { message_id: 0 }),
-        Op::Schedule { .. } | Op::Pause | Op::Resume => {
-            Err(anyhow::anyhow!("op not yet implemented"))
+        Op::Schedule { to, body, when } => {
+            let deliver_at = match when {
+                crate::proto::When::DelaySeconds { delay_seconds } => {
+                    let secs = i64::try_from(delay_seconds).unwrap_or(i64::MAX);
+                    chrono::Utc::now() + chrono::Duration::seconds(secs)
+                }
+                crate::proto::When::At { at } => at,
+            };
+            daemon
+                .store
+                .schedule(agent_name, &to, &body, None, None, deliver_at)
+                .await
+                .map(|id| ResponseData::SendOk { message_id: id })
         }
+        Op::Pause | Op::Resume => Err(anyhow::anyhow!("op not yet implemented")),
     };
 
     match result {

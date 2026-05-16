@@ -13,7 +13,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::client::Client;
-use crate::proto::{Op, ResponseData};
+use crate::proto::{Op, ResponseData, When};
 use crate::types::Recipient;
 
 #[derive(Clone)]
@@ -43,7 +43,9 @@ struct SendArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct InboxArgs {
-    /// Long-poll wait in milliseconds. (Currently ignored; returns immediately.)
+    /// Long-poll wait in milliseconds. If set and the inbox is empty, the
+    /// call blocks up to this many milliseconds waiting for a new message
+    /// addressed to the calling agent. Capped server-side at 5 minutes.
     #[serde(default)]
     wait_ms: Option<u64>,
 }
@@ -65,6 +67,20 @@ fn default_history_limit() -> usize {
     50
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ScheduleArgs {
+    /// Recipient: `@agent`, `#channel`, or `*`.
+    to: String,
+    /// Body.
+    body: String,
+    /// Send this many seconds from now. Either `delay_seconds` or `at` must be set.
+    #[serde(default)]
+    delay_seconds: Option<u64>,
+    /// Send at this ISO-8601 UTC timestamp.
+    #[serde(default)]
+    at: Option<String>,
+}
+
 #[tool_router(server_handler)]
 impl SidebarMcp {
     #[tool(description = "Returns the calling agent's registered name in sidebar.")]
@@ -84,7 +100,9 @@ impl SidebarMcp {
         .await
     }
 
-    #[tool(description = "Read all unread messages for the calling agent. Marks them as read.")]
+    #[tool(
+        description = "Read all unread messages for the calling agent. Marks them as read. Pass `wait_ms` to long-poll up to that many ms when the inbox is empty."
+    )]
     async fn inbox(&self, Parameters(args): Parameters<InboxArgs>) -> String {
         self.call(Op::Inbox {
             wait_ms: args.wait_ms,
@@ -110,6 +128,47 @@ impl SidebarMcp {
     #[tool(description = "List known channels.")]
     async fn channels(&self) -> String {
         self.call(Op::Channels).await
+    }
+
+    #[tool(
+        description = "Schedule a delayed send. Provide either `delay_seconds` or `at` (ISO-8601 UTC)."
+    )]
+    async fn schedule(&self, Parameters(args): Parameters<ScheduleArgs>) -> String {
+        let when = match (args.delay_seconds, args.at.as_deref()) {
+            (Some(s), None) => When::DelaySeconds { delay_seconds: s },
+            (None, Some(at)) => match chrono::DateTime::parse_from_rfc3339(at) {
+                Ok(ts) => When::At {
+                    at: ts.with_timezone(&chrono::Utc),
+                },
+                Err(e) => {
+                    return serde_json::json!({
+                        "ok": false,
+                        "error": format!("invalid `at` timestamp: {e}")
+                    })
+                    .to_string();
+                }
+            },
+            (Some(_), Some(_)) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": "provide either `delay_seconds` or `at`, not both"
+                })
+                .to_string();
+            }
+            (None, None) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": "either `delay_seconds` or `at` is required"
+                })
+                .to_string();
+            }
+        };
+        self.call(Op::Schedule {
+            to: args.to,
+            body: args.body,
+            when,
+        })
+        .await
     }
 }
 

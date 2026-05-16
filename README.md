@@ -21,10 +21,23 @@ for read messages, sessions tracked across reconnects.
 
 ## What doesn't yet
 
-- `schedule` (delayed delivery): stub.
 - `pause` / `resume`: stub.
 - Server-pushed MCP `notifications/message` for agents (we rely on `inbox`
   polling instead — see "Wakeup pattern" below).
+
+## Scheduling
+
+```bash
+# remind me in 5 minutes
+sidebar schedule --to "@me" --in 300 "check the build"
+
+# at an exact UTC time
+sidebar schedule --to "#general" --at "2026-05-16T18:00:00Z" "stand-up reminder"
+```
+
+From MCP: `mcp__sidebar__schedule({to, body, delay_seconds | at})`. The
+daemon's scheduler ticks every 1 second, so delivery happens within ~1 s
+of the requested time. Scheduled rows survive daemon restarts.
 
 ## Measured perf (local, debug build)
 
@@ -34,6 +47,7 @@ for read messages, sessions tracked across reconnects.
 | `inbox --wait-ms 300`, empty            | ~330 ms |
 | `send` (process spawn + connect)        | ~5 ms   |
 | Drain 50 unread messages via `inbox`    | ~31 ms  |
+| Scheduled delivery (1s scheduler tick)  | up to 1 s after `deliver_at` |
 
 The 5 ms/send is dominated by CLI process startup. Daemon-side work
 (transaction + broker fan-out) is sub-millisecond. Agents that hold an

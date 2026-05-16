@@ -13,6 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::Mutex;
 
 use crate::types::{Intent, Message, Recipient};
+use serde::{Deserialize, Serialize};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -43,6 +44,28 @@ pub struct SendResult {
     /// for per-recipient filtered subscriptions.
     #[allow(dead_code)]
     pub recipients: Vec<String>,
+}
+
+/// Persisted payload for a scheduled send. Stored as JSON in `scheduled.payload`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ScheduledPayload {
+    from: String,
+    to: String,
+    body: String,
+    #[serde(default)]
+    intent: Option<String>,
+    #[serde(default)]
+    reply_to: Option<i64>,
+}
+
+/// One scheduled send that has just been delivered. The daemon uses this to
+/// publish events to subscribers.
+#[derive(Debug, Clone)]
+pub struct DeliveredScheduled {
+    pub message_id: i64,
+    pub from: String,
+    pub to: Recipient,
+    pub body: String,
 }
 
 impl Store {
@@ -311,6 +334,144 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.reverse();
             Ok(rows)
+        })
+        .await?
+    }
+
+    /// Schedule a send for `deliver_at`. Returns the scheduled row id.
+    pub async fn schedule(
+        &self,
+        from_name: &str,
+        to: &str,
+        body: &str,
+        intent: Option<Intent>,
+        reply_to: Option<i64>,
+        deliver_at: DateTime<Utc>,
+    ) -> Result<i64> {
+        let conn = self.conn.clone();
+        let payload = ScheduledPayload {
+            from: from_name.to_string(),
+            to: to.to_string(),
+            body: body.to_string(),
+            intent: intent.map(|i| intent_to_str(i).to_string()),
+            reply_to,
+        };
+        let payload_json = serde_json::to_string(&payload)?;
+        let now = Utc::now().to_rfc3339();
+        let deliver_at = deliver_at.to_rfc3339();
+        tokio::task::spawn_blocking(move || -> Result<i64> {
+            let conn = conn.blocking_lock();
+            conn.execute(
+                "INSERT INTO scheduled (payload, deliver_at, created_at, status)
+                 VALUES (?1, ?2, ?3, 'pending')",
+                params![payload_json, deliver_at, now],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+        .await?
+    }
+
+    /// Deliver all pending scheduled rows whose `deliver_at` is in the past.
+    /// Inserts message + deliveries rows just like `send_message`, marks the
+    /// scheduled row `delivered`. Returns events for the caller to broadcast.
+    pub async fn deliver_due(&self) -> Result<Vec<DeliveredScheduled>> {
+        let conn = self.conn.clone();
+        let now = Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || -> Result<Vec<DeliveredScheduled>> {
+            let mut conn = conn.blocking_lock();
+            let tx = conn.transaction()?;
+
+            let due: Vec<(i64, String)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT id, payload FROM scheduled
+                     WHERE status = 'pending' AND deliver_at <= ?1
+                     ORDER BY deliver_at ASC
+                     LIMIT 100",
+                )?;
+                stmt.query_map(params![now], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            let mut delivered = Vec::with_capacity(due.len());
+            for (sched_id, payload_json) in due {
+                let payload: ScheduledPayload = match serde_json::from_str(&payload_json) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(error = %e, scheduled_id = sched_id, "bad scheduled payload, marking failed");
+                        tx.execute(
+                            "UPDATE scheduled SET status = 'failed' WHERE id = ?1",
+                            params![sched_id],
+                        )?;
+                        continue;
+                    }
+                };
+
+                let recipient = Recipient::parse(&payload.to);
+                let from_id = ensure_agent_blocking(&tx, &payload.from)?;
+                let (to_agent, to_channel, is_broadcast) = match &recipient {
+                    Recipient::Agent(name) => {
+                        let id = ensure_agent_blocking(&tx, name)?;
+                        (Some(id), None, false)
+                    }
+                    Recipient::Channel(name) => {
+                        let id = ensure_channel_blocking(&tx, name)?;
+                        (None, Some(id), false)
+                    }
+                    Recipient::Broadcast => (None, None, true),
+                };
+
+                tx.execute(
+                    "INSERT INTO messages (from_agent, to_agent, to_channel, is_broadcast, body, intent, reply_to, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![from_id, to_agent, to_channel, i64::from(is_broadcast), payload.body, payload.intent, payload.reply_to, now],
+                )?;
+                let msg_id = tx.last_insert_rowid();
+
+                // Compute recipient agents (same logic as send_message).
+                let recipient_ids: Vec<i64> = match &recipient {
+                    Recipient::Agent(_) => vec![to_agent.expect("agent id set above")],
+                    Recipient::Channel(_) => {
+                        let cid = to_channel.expect("channel id set above");
+                        let mut stmt = tx.prepare(
+                            "SELECT a.id FROM agents a
+                             JOIN memberships m ON m.agent_id = a.id
+                             WHERE m.channel_id = ?1 AND a.id != ?2",
+                        )?;
+                        stmt.query_map(params![cid, from_id], |r| r.get::<_, i64>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?
+                    }
+                    Recipient::Broadcast => {
+                        let mut stmt = tx.prepare("SELECT id FROM agents WHERE id != ?1")?;
+                        stmt.query_map(params![from_id], |r| r.get::<_, i64>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?
+                    }
+                };
+
+                for aid in &recipient_ids {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO deliveries (message_id, agent_id, delivered_at)
+                         VALUES (?1, ?2, ?3)",
+                        params![msg_id, aid, now],
+                    )?;
+                }
+
+                tx.execute(
+                    "UPDATE scheduled SET status = 'delivered' WHERE id = ?1",
+                    params![sched_id],
+                )?;
+
+                delivered.push(DeliveredScheduled {
+                    message_id: msg_id,
+                    from: payload.from,
+                    to: recipient,
+                    body: payload.body,
+                });
+            }
+
+            tx.commit()?;
+            Ok(delivered)
         })
         .await?
     }

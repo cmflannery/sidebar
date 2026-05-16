@@ -42,6 +42,24 @@ pub enum Command {
     /// Send a message as `master` to an agent or channel.
     Send { to: String, body: String },
 
+    /// Schedule a delayed send. Either --in or --at must be set.
+    Schedule {
+        /// Recipient: `@name`, `#channel`, or `*`.
+        #[arg(long)]
+        to: String,
+        /// Body.
+        body: String,
+        /// Send N seconds from now.
+        #[arg(long = "in", value_name = "SECONDS")]
+        in_seconds: Option<u64>,
+        /// Send at an ISO-8601 timestamp (UTC).
+        #[arg(long)]
+        at: Option<String>,
+        /// Speak as this agent (default: master).
+        #[arg(long = "as", default_value = "master")]
+        as_name: String,
+    },
+
     /// Read unread messages addressed to an agent (default: `master`).
     /// Marks messages as read on return.
     Inbox {

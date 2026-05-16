@@ -15,6 +15,13 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Mcp { as_name } => mcp(as_name).await,
         Command::Tail { json } => tail(json).await,
         Command::Send { to, body } => send(to, body).await,
+        Command::Schedule {
+            to,
+            body,
+            in_seconds,
+            at,
+            as_name,
+        } => schedule(to, body, in_seconds, at, as_name).await,
         Command::Inbox { as_name, wait_ms } => inbox(as_name, wait_ms).await,
         Command::Say { body } => say(body).await,
         Command::Participants => participants().await,
@@ -138,6 +145,37 @@ async fn inbox(as_name: String, wait_ms: Option<u64>) -> Result<()> {
 
 async fn say(body: String) -> Result<()> {
     send("*".to_string(), body).await
+}
+
+async fn schedule(
+    to: String,
+    body: String,
+    in_seconds: Option<u64>,
+    at: Option<String>,
+    as_name: String,
+) -> Result<()> {
+    use crate::proto::When;
+    let when = match (in_seconds, at) {
+        (Some(s), None) => When::DelaySeconds { delay_seconds: s },
+        (None, Some(at)) => {
+            let ts = chrono::DateTime::parse_from_rfc3339(&at)
+                .map_err(|e| anyhow::anyhow!("invalid --at timestamp: {e}"))?;
+            When::At {
+                at: ts.with_timezone(&chrono::Utc),
+            }
+        }
+        (Some(_), Some(_)) => anyhow::bail!("use --in or --at, not both"),
+        (None, None) => anyhow::bail!("either --in <seconds> or --at <ISO8601> is required"),
+    };
+    let mut client = Client::connect_as(&as_name).await?;
+    let resp = client.request(Op::Schedule { to, body, when }).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    if let Some(ResponseData::SendOk { message_id }) = resp.data {
+        println!("scheduled id {message_id}");
+    }
+    Ok(())
 }
 
 async fn participants() -> Result<()> {
