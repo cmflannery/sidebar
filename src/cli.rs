@@ -1,3 +1,7 @@
+// Stubs are async by design — they will do socket I/O when implemented.
+// Silencing until the bodies are real.
+#![allow(clippy::unused_async)]
+
 use anyhow::Result;
 
 use crate::Command;
@@ -10,14 +14,18 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Send { to, body } => send(to, body).await,
         Command::Say { body } => say(body).await,
         Command::Participants => participants().await,
-        Command::History { channel, with, limit } => history(channel, with, limit).await,
+        Command::History {
+            channel,
+            with,
+            limit,
+        } => history(channel, with, limit).await,
         Command::Pause => pause().await,
         Command::Resume => resume().await,
     }
 }
 
 async fn serve() -> Result<()> {
-    anyhow::bail!("daemon not yet implemented — see ARCHITECTURE.md §3")
+    crate::daemon::serve().await
 }
 
 async fn mcp() -> Result<()> {
@@ -37,7 +45,20 @@ async fn say(_body: String) -> Result<()> {
 }
 
 async fn participants() -> Result<()> {
-    anyhow::bail!("participants not yet implemented")
+    let mut client = crate::client::Client::connect_as("master").await?;
+    let resp = client.request(crate::proto::Op::Participants).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    match resp.data {
+        Some(crate::proto::ResponseData::Agents { agents }) => {
+            for a in agents {
+                println!("{a}");
+            }
+            Ok(())
+        }
+        other => anyhow::bail!("unexpected response data: {other:?}"),
+    }
 }
 
 async fn history(_channel: Option<String>, _with: Option<String>, _limit: usize) -> Result<()> {

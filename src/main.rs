@@ -2,11 +2,18 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod cli;
+mod client;
+mod daemon;
+mod paths;
 mod proto;
 mod types;
 
 #[derive(Parser)]
-#[command(name = "sidebar", version, about = "Local MCP server for inter-agent messaging")]
+#[command(
+    name = "sidebar",
+    version,
+    about = "Local MCP server for inter-agent messaging"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
