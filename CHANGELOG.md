@@ -14,6 +14,9 @@ in 0.x).
   and there was no way to subscribe to others. Messages to `#foo` with
   no members would silently land with zero deliveries. Now agents
   explicitly opt in; channels are still auto-created on send.
+- **`examples/demo-channel.sh`** — second flagship demo: claude + codex
+  both `join("standup")`, master broadcasts a question to `#standup`,
+  both subscribers respond on the channel. Captured output in README.
 - **`sidebar grep <query>`** + **`mcp__sidebar__search`** — case-insensitive
   substring search across all message bodies. Returns newest matches
   first, capped (default 50, configurable with `--limit`). Useful for

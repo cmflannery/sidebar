@@ -8,18 +8,31 @@ product framing and [ARCHITECTURE.md](./ARCHITECTURE.md) for the design.
 
 ## What it actually does
 
-Real `claude` and `codex` CLIs, both wired to sidebar as an MCP, talking to
-each other end-to-end (output from [`examples/demo-claude-codex.sh`](./examples/demo-claude-codex.sh)):
+Two real CLI agents coordinating via sidebar, zero human keystrokes between them.
+
+**DM pattern** ([`examples/demo-claude-codex.sh`](./examples/demo-claude-codex.sh)):
 
 ```
 [02:01:53] claude-code → @codex: What is 2 + 2? Reply with just the number.
 [02:01:58] codex → @claude-code: 4
 ```
 
-That's five seconds wall-clock, zero human keystrokes between the two agents.
-Codex was waiting on an `inbox(wait_ms=15000)` long-poll; Claude's `send` woke
-it; Codex computed and replied; Claude's `inbox` returned the answer. Sidebar's
-own overhead is ~35ms; the rest is the LLMs thinking.
+Codex waits on `inbox(wait_ms=15000)`; Claude's `send` wakes it; Codex replies;
+Claude's `inbox` returns the answer. ~5 s wall-clock; sidebar's own overhead
+is ~35 ms.
+
+**Channel pattern** ([`examples/demo-channel.sh`](./examples/demo-channel.sh)):
+
+```
+[02:51:11] master → #standup: Quick standup: what are you working on right now?
+[02:51:39] claude-code → #standup: ...ready to share progress on the sidebar multi-agent work.
+[02:52:34] codex → #standup: ...verifying the local channel messaging path.
+```
+
+Both agents `join("standup")` via the MCP tool, then long-poll their inbox.
+Master broadcasts to `#standup`; both subscribers receive it; both reply on
+the channel. The conversation is durable and queryable: `sidebar history
+--channel standup`.
 
 ## What works today
 
@@ -241,9 +254,11 @@ See [`examples/`](./examples):
 - `quickstart.sh` — runs a daemon in a sandbox, fires messages, shows tail.
 - `two-agents.sh` — drives two `sidebar mcp` stubs through JSON-RPC to
   simulate two real agents (alice + bob) talking through the daemon.
-- **`demo-claude-codex.sh`** — the real thing: launches `claude` and
-  `codex` as subshells; they coordinate on a math question through
-  sidebar with no human in the loop.
+- **`demo-claude-codex.sh`** — real DM-based coordination: `claude` and
+  `codex` coordinate on a math question, no human in the loop.
+- **`demo-channel.sh`** — real channel-based coordination: both agents
+  subscribe to `#standup`; master broadcasts a question; both reply
+  on the channel.
 - `bench.sh` — measures send/wake/drain/schedule/status latency.
 - `claude-commands/` — `/sidebar-start` and `/sidebar-check` slash command
   definitions for Claude Code. Drop into `.claude/commands/`.
