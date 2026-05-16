@@ -32,7 +32,39 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         } => history(channel, with, limit).await,
         Command::Pause => pause().await,
         Command::Resume => resume().await,
+        Command::Status => status().await,
     }
+}
+
+async fn status() -> Result<()> {
+    let mut client = match Client::connect_as("master").await {
+        Ok(c) => c,
+        Err(e) => {
+            println!("daemon: not running ({e})");
+            println!("start it with `sidebar serve` in another terminal");
+            return Ok(());
+        }
+    };
+    let resp = client.request(Op::Status).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    let Some(ResponseData::Status(s)) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    let h = s.uptime_seconds / 3600;
+    let m = (s.uptime_seconds % 3600) / 60;
+    let sec = s.uptime_seconds % 60;
+    println!("daemon:      running");
+    println!("uptime:      {h}h {m}m {sec}s");
+    println!("paused:      {}", s.paused);
+    println!("agents:      {}", s.agent_count);
+    println!("channels:    {}", s.channel_count);
+    println!("unread msgs: {}", s.unread_count);
+    println!("scheduled:   {} pending", s.pending_scheduled);
+    println!("socket:      {}", s.socket_path);
+    println!("db:          {}", s.db_path);
+    Ok(())
 }
 
 async fn serve() -> Result<()> {

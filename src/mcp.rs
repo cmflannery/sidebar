@@ -210,6 +210,10 @@ impl SidebarMcp {
                         Some(ResponseData::Channels { channels }) => {
                             serde_json::json!({ "ok": true, "channels": channels }).to_string()
                         }
+                        Some(ResponseData::Status(s)) => {
+                            serde_json::to_string(&serde_json::json!({ "ok": true, "status": s }))
+                                .unwrap_or_else(|e| format!("{{\"ok\":false,\"error\":\"{e}\"}}"))
+                        }
                         None => serde_json::json!({ "ok": true }).to_string(),
                     }
                 } else {

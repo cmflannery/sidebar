@@ -338,6 +338,30 @@ impl Store {
         .await?
     }
 
+    /// Snapshot counts for the status command. Returns
+    /// (agents, channels, unread_deliveries, pending_scheduled).
+    pub async fn status_counts(&self) -> Result<(i64, i64, i64, i64)> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<(i64, i64, i64, i64)> {
+            let conn = conn.blocking_lock();
+            let agents: i64 = conn.query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))?;
+            let channels: i64 =
+                conn.query_row("SELECT COUNT(*) FROM channels", [], |r| r.get(0))?;
+            let unread: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM deliveries WHERE read_at IS NULL",
+                [],
+                |r| r.get(0),
+            )?;
+            let pending: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM scheduled WHERE status = 'pending'",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok((agents, channels, unread, pending))
+        })
+        .await?
+    }
+
     /// Schedule a send for `deliver_at`. Returns the scheduled row id.
     pub async fn schedule(
         &self,

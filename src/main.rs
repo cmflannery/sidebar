@@ -92,6 +92,9 @@ pub enum Command {
 
     /// Resume message delivery.
     Resume,
+
+    /// Show daemon health, counts, and paths.
+    Status,
 }
 
 #[tokio::main]

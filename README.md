@@ -26,6 +26,16 @@ for read messages, sessions tracked across reconnects.
 - A unique-name strategy for multiple Claude Code sessions sharing the
   same MCP config — for now, set `SIDEBAR_AGENT_NAME` per terminal.
 
+## Inspecting state
+
+```bash
+sidebar status
+```
+
+Shows daemon uptime, pause state, agent / channel counts, unread total,
+pending scheduled rows, and the socket / db paths. When the daemon is
+down, prints a friendly hint instead of an error.
+
 ## Master controls
 
 ```bash

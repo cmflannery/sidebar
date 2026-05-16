@@ -139,6 +139,55 @@ fn unknown_subcommand_fails() {
 }
 
 #[test]
+fn status_reports_counts_and_paused_state() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@iris", "msg1"]);
+    sb.stdout(&["send", "@iris", "msg2"]);
+    sb.stdout(&["schedule", "--to", "@iris", "--in", "60", "later"]);
+    sb.stdout(&["pause"]);
+
+    let out = sb.stdout(&["status"]);
+    assert!(
+        out.contains("daemon:      running"),
+        "status missing daemon line: {out}"
+    );
+    assert!(
+        out.contains("paused:      true"),
+        "status didn't report paused: {out}"
+    );
+    assert!(out.contains("unread msgs: 2"), "wrong unread count: {out}");
+    assert!(
+        out.contains("scheduled:   1 pending"),
+        "wrong scheduled count: {out}"
+    );
+}
+
+#[test]
+fn status_reports_friendly_message_when_daemon_down() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let home = std::env::temp_dir().join(format!("sidebar-test-{pid}-{id}-nodaemon"));
+    std::fs::create_dir_all(&home).unwrap();
+
+    let out = Command::new(sidebar_bin())
+        .args(["status"])
+        .env("SIDEBAR_HOME", &home)
+        .output()
+        .expect("run status");
+    assert!(
+        out.status.success(),
+        "status should not crash when daemon is down"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("not running"),
+        "expected friendly down message: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
 fn pause_blocks_sends_and_resume_unblocks() {
     let sb = Sandbox::new();
     sb.stdout(&["pause"]);

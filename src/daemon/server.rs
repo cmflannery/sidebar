@@ -27,6 +27,8 @@ pub struct Daemon {
     pub events: broadcast::Sender<Event>,
     /// When true, Op::Send is rejected and scheduler deliveries are held.
     pub paused: Arc<AtomicBool>,
+    /// Used by `Op::Status` to report uptime.
+    pub started_at: std::time::Instant,
 }
 
 impl Daemon {
@@ -36,6 +38,7 @@ impl Daemon {
             store,
             events,
             paused: Arc::new(AtomicBool::new(false)),
+            started_at: std::time::Instant::now(),
         }
     }
 
@@ -372,6 +375,29 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
             let _ = daemon.events.send(Event::Resumed);
             Ok(ResponseData::SendOk { message_id: 0 })
         }
+        Op::Status => match daemon.store.status_counts().await {
+            Ok((agent_count, channel_count, unread_count, pending_scheduled)) => {
+                let socket = crate::paths::socket()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                let db = crate::paths::db()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                let uptime =
+                    i64::try_from(daemon.started_at.elapsed().as_secs()).unwrap_or(i64::MAX);
+                Ok(ResponseData::Status(crate::proto::StatusInfo {
+                    paused: daemon.is_paused(),
+                    agent_count,
+                    channel_count,
+                    unread_count,
+                    pending_scheduled,
+                    uptime_seconds: uptime,
+                    db_path: db,
+                    socket_path: socket,
+                }))
+            }
+            Err(e) => Err(e),
+        },
     };
 
     match result {

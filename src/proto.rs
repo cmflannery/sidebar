@@ -65,6 +65,8 @@ pub enum Op {
     /// Switch this connection into event-forwarding mode. Any subsequent
     /// `Event::*` frames pushed by the daemon will arrive on this socket.
     Subscribe,
+    /// Snapshot of daemon health/state for `sidebar status`.
+    Status,
 }
 
 fn default_limit() -> usize {
@@ -95,6 +97,19 @@ pub enum ResponseData {
     Messages { messages: Vec<Message> },
     Agents { agents: Vec<String> },
     Channels { channels: Vec<String> },
+    Status(StatusInfo),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusInfo {
+    pub paused: bool,
+    pub agent_count: i64,
+    pub channel_count: i64,
+    pub unread_count: i64,
+    pub pending_scheduled: i64,
+    pub uptime_seconds: i64,
+    pub db_path: String,
+    pub socket_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
