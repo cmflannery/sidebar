@@ -20,8 +20,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
 
-# rmcp (Rust MCP SDK) — wired up when we implement `sidebar mcp`.
-# rmcp = "1"
+rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
 
 [lints.rust]
 unsafe_code = "forbid"

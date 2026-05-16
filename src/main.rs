@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 mod cli;
 mod client;
 mod daemon;
+mod mcp;
 mod paths;
 mod proto;
 mod types;
@@ -25,7 +26,12 @@ pub enum Command {
     Serve,
 
     /// MCP stdio stub. Wire this into Claude Code / Codex MCP config.
-    Mcp,
+    Mcp {
+        /// Agent name to register with the daemon. Falls back to
+        /// $SIDEBAR_AGENT_NAME, then `agent-<pid>`.
+        #[arg(long = "as", value_name = "NAME")]
+        as_name: Option<String>,
+    },
 
     /// Stream messages live to terminal.
     Tail {

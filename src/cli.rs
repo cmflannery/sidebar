@@ -12,7 +12,7 @@ use crate::types::Recipient;
 pub async fn dispatch(cmd: Command) -> Result<()> {
     match cmd {
         Command::Serve => serve().await,
-        Command::Mcp => mcp().await,
+        Command::Mcp { as_name } => mcp(as_name).await,
         Command::Tail { json } => tail(json).await,
         Command::Send { to, body } => send(to, body).await,
         Command::Say { body } => say(body).await,
@@ -31,8 +31,11 @@ async fn serve() -> Result<()> {
     crate::daemon::serve().await
 }
 
-async fn mcp() -> Result<()> {
-    anyhow::bail!("mcp stub not yet implemented — see ARCHITECTURE.md §4")
+async fn mcp(as_name: Option<String>) -> Result<()> {
+    let name = as_name
+        .or_else(|| std::env::var("SIDEBAR_AGENT_NAME").ok())
+        .unwrap_or_else(|| format!("agent-{}", std::process::id()));
+    crate::mcp::serve(name).await
 }
 
 async fn tail(json: bool) -> Result<()> {
