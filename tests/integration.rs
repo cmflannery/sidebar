@@ -188,6 +188,42 @@ fn status_reports_friendly_message_when_daemon_down() {
 }
 
 #[test]
+fn channel_mention_pings_nonmember() {
+    let sb = Sandbox::new();
+    // alice never joins #project but is mentioned in a message there.
+    sb.stdout(&["send", "@alice", "create alice"]);
+    sb.stdout(&["inbox", "--as", "alice"]); // drain
+
+    sb.stdout(&["send", "#project", "hey @alice, can you look at this?"]);
+    let inbox = sb.stdout(&["inbox", "--as", "alice"]);
+    assert!(
+        inbox.contains("hey @alice"),
+        "@-mention didn't ping non-member: {inbox}"
+    );
+}
+
+#[test]
+fn dm_mention_does_not_create_extra_deliveries() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@bob", "create bob"]);
+    sb.stdout(&["send", "@charlie", "create charlie"]);
+    sb.stdout(&["inbox", "--as", "bob"]); // drain
+    sb.stdout(&["inbox", "--as", "charlie"]); // drain
+
+    // DM to bob that mentions charlie — charlie should NOT receive it.
+    sb.stdout(&["send", "@bob", "hey @charlie said hi"]);
+
+    let charlie_inbox = sb.stdout(&["inbox", "--as", "charlie"]);
+    assert!(
+        charlie_inbox.is_empty(),
+        "@-mention in a DM leaked to mentioned agent: {charlie_inbox}"
+    );
+
+    let bob_inbox = sb.stdout(&["inbox", "--as", "bob"]);
+    assert!(bob_inbox.contains("@charlie said hi"), "bob missed his DM");
+}
+
+#[test]
 fn channel_join_delivers_to_member_leave_stops_delivery() {
     let sb = Sandbox::new();
 

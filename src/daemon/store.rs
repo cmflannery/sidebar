@@ -211,7 +211,7 @@ impl Store {
             )?;
             let msg_id = tx.last_insert_rowid();
 
-            let recipient_ids: Vec<i64> = match &to {
+            let mut recipient_ids: Vec<i64> = match &to {
                 Recipient::Agent(_) => vec![to_agent.expect("agent id set above")],
                 Recipient::Channel(_) => {
                     let cid = to_channel.expect("channel id set above");
@@ -229,6 +229,21 @@ impl Store {
                         .collect::<rusqlite::Result<Vec<_>>>()?
                 }
             };
+
+            // Mention expansion: for channel and broadcast sends, treat
+            // `@name` tokens in the body as additional recipients. This
+            // lets agents @-ping someone who isn't subscribed to the
+            // channel. DM mentions are redundant (the target already gets
+            // it) so we skip there. The recipient agent is created on the
+            // fly if it doesn't exist yet — same affordance as `send @new`.
+            if !matches!(&to, Recipient::Agent(_)) {
+                for name in extract_mentions(&body) {
+                    let mid = ensure_agent_blocking(&tx, &name)?;
+                    if mid != from_id && !recipient_ids.contains(&mid) {
+                        recipient_ids.push(mid);
+                    }
+                }
+            }
 
             for aid in &recipient_ids {
                 tx.execute(
@@ -753,6 +768,46 @@ fn seed_defaults(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Extract `@name` mentions from a message body. Returns owned strings.
+///
+/// A mention is an `@` that is preceded by whitespace or appears at the
+/// start of the body, followed by one or more name chars (alphanumeric,
+/// `-`, or `_`). This avoids treating email addresses like
+/// `user@example.com` as mentions.
+fn extract_mentions(body: &str) -> Vec<String> {
+    let bytes = body.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let at_word_start =
+            i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\t' || bytes[i - 1] == b'\n';
+        if at_word_start && bytes[i] == b'@' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() {
+                let c = bytes[end] as char;
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            if end > start {
+                if let Ok(s) = std::str::from_utf8(&bytes[start..end]) {
+                    let name = s.to_string();
+                    if !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 fn parse_ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s).map_or_else(|_| Utc::now(), |d| d.with_timezone(&Utc))
 }
@@ -806,4 +861,50 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         reply_to,
         created_at: parse_ts(&created_at),
     })
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::extract_mentions;
+
+    #[test]
+    fn simple_mention() {
+        assert_eq!(extract_mentions("hi @codex check this"), vec!["codex"]);
+    }
+
+    #[test]
+    fn at_start_of_message() {
+        assert_eq!(extract_mentions("@alice ping"), vec!["alice"]);
+    }
+
+    #[test]
+    fn multiple_mentions_deduped() {
+        assert_eq!(
+            extract_mentions("@alice and @bob, also @alice"),
+            vec!["alice", "bob"]
+        );
+    }
+
+    #[test]
+    fn email_is_not_a_mention() {
+        assert!(extract_mentions("reach me at user@example.com").is_empty());
+    }
+
+    #[test]
+    fn trailing_punctuation_stripped() {
+        assert_eq!(extract_mentions("@codex, look!"), vec!["codex"]);
+    }
+
+    #[test]
+    fn allows_dashes_and_underscores() {
+        assert_eq!(
+            extract_mentions("hey @claude-code-2 and @bob_jr"),
+            vec!["claude-code-2", "bob_jr"]
+        );
+    }
+
+    #[test]
+    fn bare_at_no_match() {
+        assert!(extract_mentions("@ what is this").is_empty());
+    }
 }

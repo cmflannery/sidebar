@@ -8,6 +8,13 @@ in 0.x).
 ## [Unreleased]
 
 ### Added
+- **`@mention` semantics**. When a message goes to a channel or
+  broadcast, `@name` tokens in the body cause the named agent to also
+  get a delivery row — even if they aren't a channel member. Lets you
+  @-ping someone into a discussion they aren't subscribed to. DMs
+  ignore mentions (the target already receives the message). Email
+  addresses (`user@example.com`) don't false-positive because `@` must
+  follow whitespace or start of string.
 - **`sidebar join <channel> [--as NAME]`** / **`sidebar leave ...`** +
   matching `mcp__sidebar__join` / `mcp__sidebar__leave` tools. Closes a
   real gap: previously the only auto-subscribed channel was `#general`,

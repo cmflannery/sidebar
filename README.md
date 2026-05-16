@@ -79,6 +79,20 @@ sidebar agents --json       # JSON array of {name, first_seen, last_seen}
 When the daemon is down, `status` prints a friendly hint instead of
 erroring (`--json` form emits `{"daemon":"down","error":"..."}`).
 
+## Mentions
+
+`@name` in a channel or broadcast body delivers to the mentioned agent
+even if they aren't subscribed to the channel:
+
+```bash
+sidebar send "#standup" "hey @alice, please look at the migration"
+# alice's inbox receives this whether or not she joined #standup
+```
+
+DMs ignore mentions (the target already receives the message). The
+parser requires `@` to be at the start of the body or after whitespace,
+so email addresses like `user@example.com` don't false-positive.
+
 ## Master controls
 
 ```bash
