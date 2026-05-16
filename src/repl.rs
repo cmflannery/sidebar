@@ -143,7 +143,7 @@ pub async fn run(identity: String) -> Result<()> {
                 }
             }
             Err(ReadlineError::Interrupted) => {} // ^C — discard partial line
-            Err(ReadlineError::Eof) => break,            // ^D
+            Err(ReadlineError::Eof) => break,     // ^D
             Err(e) => {
                 println!("input error: {e}");
                 break;
@@ -182,7 +182,10 @@ fn print_banner(current: &str) {
         paint(BOLD, "#general"),
         paint(BOLD, "^D"),
     );
-    println!("{}", paint(DIM, "─────────────────────────────────────────────"));
+    println!(
+        "{}",
+        paint(DIM, "─────────────────────────────────────────────")
+    );
 }
 
 enum LoopControl {
@@ -190,11 +193,7 @@ enum LoopControl {
     Quit,
 }
 
-async fn handle_line(
-    client: &mut Client,
-    current: &mut String,
-    line: &str,
-) -> Result<LoopControl> {
+async fn handle_line(client: &mut Client, current: &mut String, line: &str) -> Result<LoopControl> {
     let line = line.trim();
     if let Some(slash) = line.strip_prefix('/') {
         let mut parts = slash.splitn(2, char::is_whitespace);
@@ -273,7 +272,10 @@ fn print_help() {
         (
             "messages",
             &[
-                ("/send <to> <body>", "send a message (`@name`, `#channel`, `*`)"),
+                (
+                    "/send <to> <body>",
+                    "send a message (`@name`, `#channel`, `*`)",
+                ),
                 ("/say <body>", "broadcast"),
                 ("/inbox", "read your inbox (oldest 500 unread)"),
                 ("/history --channel <name>", "channel history"),
@@ -305,14 +307,20 @@ fn print_help() {
         ),
     ];
     for (heading, items) in groups {
-        println!("\n{}", paint(&format!("{BOLD}{CYAN}"), &format!("{heading}:")));
+        println!(
+            "\n{}",
+            paint(&format!("{BOLD}{CYAN}"), &format!("{heading}:"))
+        );
         for (cmd, desc) in *items {
             println!("  {:<32}  {}", paint(BOLD, cmd), paint(DIM, desc));
         }
     }
     println!(
         "\n{}",
-        paint(DIM, "anything not starting with / is broadcast to #general.")
+        paint(
+            DIM,
+            "anything not starting with / is broadcast to #general."
+        )
     );
 }
 
@@ -496,10 +504,15 @@ async fn slash_channels(client: &mut Client, rest: &str) -> Result<LoopControl> 
                 .unwrap_or(8);
             println!("{:<w$}  members  last activity", "CHANNEL");
             for c in channels_detailed {
-                let last = c
-                    .last_message_at
-                    .map_or_else(|| "—".to_string(), |t| relative(now.signed_duration_since(t)));
-                println!("{:<w$}  {:>7}  {last}", format!("#{}", c.name), c.member_count);
+                let last = c.last_message_at.map_or_else(
+                    || "—".to_string(),
+                    |t| relative(now.signed_duration_since(t)),
+                );
+                println!(
+                    "{:<w$}  {:>7}  {last}",
+                    format!("#{}", c.name),
+                    c.member_count
+                );
             }
         }
     } else {
@@ -521,7 +534,10 @@ async fn slash_join_leave(
 ) -> Result<LoopControl> {
     let names: Vec<&str> = rest.split_whitespace().collect();
     if names.is_empty() {
-        println!("usage: /{} <channel> [channel...]", if join { "join" } else { "leave" });
+        println!(
+            "usage: /{} <channel> [channel...]",
+            if join { "join" } else { "leave" }
+        );
         return Ok(LoopControl::Continue);
     }
     for raw in names {
@@ -537,7 +553,10 @@ async fn slash_join_leave(
         };
         let reply = client.request(op).await?;
         if reply.ok {
-            println!("{current} {} #{channel}", if join { "joined" } else { "left" });
+            println!(
+                "{current} {} #{channel}",
+                if join { "joined" } else { "left" }
+            );
         } else {
             println!(
                 "({} #{channel} failed: {})",
@@ -662,16 +681,30 @@ async fn slash_inspect(client: &mut Client, rest: &str) -> Result<LoopControl> {
         println!("  {l}");
     }
     if !d.deliveries.is_empty() {
-        let w = d.deliveries.iter().map(|x| x.agent.len()).max().unwrap_or(5);
+        let w = d
+            .deliveries
+            .iter()
+            .map(|x| x.agent.len())
+            .max()
+            .unwrap_or(5);
         println!("deliveries:");
         for d2 in &d.deliveries {
             let delivered = d2.delivered_at.map_or_else(
                 || "(undelivered)".to_string(),
-                |t| t.with_timezone(&chrono::Local).format("%H:%M:%S").to_string(),
+                |t| {
+                    t.with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string()
+                },
             );
             let read = d2.read_at.map_or_else(
                 || "unread".to_string(),
-                |t| format!("read {}", t.with_timezone(&chrono::Local).format("%H:%M:%S")),
+                |t| {
+                    format!(
+                        "read {}",
+                        t.with_timezone(&chrono::Local).format("%H:%M:%S")
+                    )
+                },
             );
             println!("  {:<w$}  delivered {delivered}  {read}", d2.agent);
         }
@@ -688,8 +721,10 @@ async fn slash_status(client: &mut Client) -> Result<LoopControl> {
     let h = s.uptime_seconds / 3600;
     let m = (s.uptime_seconds % 3600) / 60;
     let sec = s.uptime_seconds % 60;
-    println!("uptime {h}h {m}m {sec}s · paused {} · agents {} · channels {} · unread {} · scheduled {}",
-        s.paused, s.agent_count, s.channel_count, s.unread_count, s.pending_scheduled);
+    println!(
+        "uptime {h}h {m}m {sec}s · paused {} · agents {} · channels {} · unread {} · scheduled {}",
+        s.paused, s.agent_count, s.channel_count, s.unread_count, s.pending_scheduled
+    );
     Ok(LoopControl::Continue)
 }
 
@@ -743,9 +778,11 @@ async fn tail_loop(printer: &mut (impl ExternalPrinter + Send)) -> Result<()> {
         let now = chrono::Local::now().format("%H:%M:%S");
         let ts = paint(DIM, &format!("[{now}]"));
         let rendered = match evt {
-            Event::Message {
-                to, from, body, ..
-            } => format!("{ts} {}: {body}{}\n", paint_name(&from), recipient_suffix(&to)),
+            Event::Message { to, from, body, .. } => format!(
+                "{ts} {}: {body}{}\n",
+                paint_name(&from),
+                recipient_suffix(&to)
+            ),
             Event::Paused => format!("{ts} {}\n", paint(YELLOW, "(paused)")),
             Event::Resumed => format!("{ts} {}\n", paint(YELLOW, "(resumed)")),
         };
