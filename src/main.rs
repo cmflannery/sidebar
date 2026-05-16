@@ -132,18 +132,20 @@ pub enum Command {
         json: bool,
     },
 
-    /// Subscribe an agent to a channel (without leading `#`).
+    /// Subscribe an agent to one or more channels (leading `#` is tolerated).
     Join {
-        /// Channel name (no `#`).
-        channel: String,
+        /// Channel names. `sidebar join standup deploys releases`.
+        #[arg(required = true)]
+        channels: Vec<String>,
         /// Agent to subscribe (default: master).
         #[arg(long = "as", default_value = "master")]
         as_name: String,
     },
 
-    /// Unsubscribe an agent from a channel.
+    /// Unsubscribe an agent from one or more channels.
     Leave {
-        channel: String,
+        #[arg(required = true)]
+        channels: Vec<String>,
         #[arg(long = "as", default_value = "master")]
         as_name: String,
     },

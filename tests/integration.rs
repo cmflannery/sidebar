@@ -715,6 +715,42 @@ fn dm_mention_does_not_create_extra_deliveries() {
 }
 
 #[test]
+fn join_can_subscribe_to_multiple_channels_in_one_call() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@gwen", "create gwen"]);
+    sb.stdout(&["inbox", "--as", "gwen"]); // drain
+
+    // One call, three channels — works for the CLI.
+    let out = sb.stdout(&["join", "alpha", "beta", "gamma", "--as", "gwen"]);
+    assert!(out.contains("joined #alpha"));
+    assert!(out.contains("joined #beta"));
+    assert!(out.contains("joined #gamma"));
+
+    // Messages to any of the three reach gwen.
+    sb.stdout(&["send", "#alpha", "to alpha"]);
+    sb.stdout(&["send", "#beta", "to beta"]);
+    sb.stdout(&["send", "#gamma", "to gamma"]);
+    let inbox = sb.stdout(&["inbox", "--as", "gwen"]);
+    assert!(inbox.contains("to alpha"));
+    assert!(inbox.contains("to beta"));
+    assert!(inbox.contains("to gamma"));
+
+    // Multi-leave also works.
+    sb.stdout(&["leave", "alpha", "beta", "--as", "gwen"]);
+    sb.stdout(&["send", "#alpha", "alpha after leave"]);
+    sb.stdout(&["send", "#gamma", "gamma after leave"]);
+    let inbox = sb.stdout(&["inbox", "--as", "gwen"]);
+    assert!(
+        !inbox.contains("alpha after leave"),
+        "leave didn't unsubscribe alpha: {inbox}"
+    );
+    assert!(
+        inbox.contains("gamma after leave"),
+        "still-joined gamma missed: {inbox}"
+    );
+}
+
+#[test]
 fn channel_join_delivers_to_member_leave_stops_delivery() {
     let sb = Sandbox::new();
 

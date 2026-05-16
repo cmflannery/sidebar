@@ -73,9 +73,9 @@ fn default_history_limit() -> usize {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ChannelArg {
-    /// Channel name. Leading `#` is tolerated.
-    channel: String,
+struct ChannelsArg {
+    /// One or more channel names. Leading `#` on any name is tolerated.
+    channels: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -162,21 +162,33 @@ impl SidebarMcp {
     }
 
     #[tool(
-        description = "Subscribe the calling agent to a channel. Pass the name without a leading `#`. Auto-creates the channel if it doesn't exist."
+        description = "Subscribe the calling agent to one or more channels. Pass `channels` as an array of names (leading `#` tolerated). Auto-creates any channel that doesn't exist."
     )]
-    async fn join(&self, Parameters(args): Parameters<ChannelArg>) -> String {
-        self.call(Op::Join {
-            channel: args.channel.trim_start_matches('#').to_string(),
-        })
-        .await
+    async fn join(&self, Parameters(args): Parameters<ChannelsArg>) -> String {
+        for raw in &args.channels {
+            let channel = raw.trim_start_matches('#').to_string();
+            let r = self.call(Op::Join { channel }).await;
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r) {
+                if v.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+                    return r;
+                }
+            }
+        }
+        serde_json::json!({ "ok": true, "joined": args.channels.len() }).to_string()
     }
 
-    #[tool(description = "Unsubscribe the calling agent from a channel.")]
-    async fn leave(&self, Parameters(args): Parameters<ChannelArg>) -> String {
-        self.call(Op::Leave {
-            channel: args.channel.trim_start_matches('#').to_string(),
-        })
-        .await
+    #[tool(description = "Unsubscribe the calling agent from one or more channels.")]
+    async fn leave(&self, Parameters(args): Parameters<ChannelsArg>) -> String {
+        for raw in &args.channels {
+            let channel = raw.trim_start_matches('#').to_string();
+            let r = self.call(Op::Leave { channel }).await;
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r) {
+                if v.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+                    return r;
+                }
+            }
+        }
+        serde_json::json!({ "ok": true, "left": args.channels.len() }).to_string()
     }
 
     #[tool(

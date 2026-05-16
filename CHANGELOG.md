@@ -80,6 +80,12 @@ in 0.x).
   `Recipient::parse` also now trims leading/trailing whitespace.
 
 ### Added
+- **Multi-channel `sidebar join` / `sidebar leave`.** Both CLI commands
+  now take one or more positional channel names:
+  `sidebar join standup deploys releases`. The MCP `join` / `leave`
+  tools take `channels: [string]`. Single-channel invocations still
+  work (`sidebar join foo` → channels=["foo"]). No wire change — the
+  CLI/MCP layers explode the list to N `Op::Join`/`Op::Leave` calls.
 - **`sidebar inspect <message-id>`** — operator debug helper. Prints the
   message header, body, and a per-recipient delivery table showing
   delivered_at / read_at for each agent. Useful for "did codex see my

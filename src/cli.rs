@@ -39,8 +39,8 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
             json,
         } => history(channel, with, limit, json).await,
         Command::Grep { query, limit, json } => grep(query, limit, json).await,
-        Command::Join { channel, as_name } => join(channel, as_name).await,
-        Command::Leave { channel, as_name } => leave(channel, as_name).await,
+        Command::Join { channels, as_name } => join(channels, as_name).await,
+        Command::Leave { channels, as_name } => leave(channels, as_name).await,
         Command::Inspect { message_id, json } => inspect(message_id, json).await,
         Command::Scheduled { as_name, json } => scheduled(as_name, json).await,
         Command::Cancel {
@@ -342,33 +342,43 @@ fn print_messages(messages: &[crate::types::Message], json: bool) -> Result<()> 
     Ok(())
 }
 
-async fn join(channel: String, as_name: String) -> Result<()> {
-    let channel = channel.trim_start_matches('#').to_string();
+async fn join(channels: Vec<String>, as_name: String) -> Result<()> {
     let mut client = Client::connect_as(&as_name).await?;
-    let resp = client
-        .request(Op::Join {
-            channel: channel.clone(),
-        })
-        .await?;
-    if !resp.ok {
-        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    for raw in channels {
+        let channel = raw.trim_start_matches('#').to_string();
+        let resp = client
+            .request(Op::Join {
+                channel: channel.clone(),
+            })
+            .await?;
+        if !resp.ok {
+            anyhow::bail!(
+                "daemon error joining #{channel}: {}",
+                resp.error.unwrap_or_default()
+            );
+        }
+        println!("{as_name} joined #{channel}");
     }
-    println!("{as_name} joined #{channel}");
     Ok(())
 }
 
-async fn leave(channel: String, as_name: String) -> Result<()> {
-    let channel = channel.trim_start_matches('#').to_string();
+async fn leave(channels: Vec<String>, as_name: String) -> Result<()> {
     let mut client = Client::connect_as(&as_name).await?;
-    let resp = client
-        .request(Op::Leave {
-            channel: channel.clone(),
-        })
-        .await?;
-    if !resp.ok {
-        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    for raw in channels {
+        let channel = raw.trim_start_matches('#').to_string();
+        let resp = client
+            .request(Op::Leave {
+                channel: channel.clone(),
+            })
+            .await?;
+        if !resp.ok {
+            anyhow::bail!(
+                "daemon error leaving #{channel}: {}",
+                resp.error.unwrap_or_default()
+            );
+        }
+        println!("{as_name} left #{channel}");
     }
-    println!("{as_name} left #{channel}");
     Ok(())
 }
 
