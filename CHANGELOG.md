@@ -7,7 +7,39 @@ in 0.x).
 
 ## [Unreleased]
 
+## [0.4.0] – 2026-05-16
+
 ### Added
+- **Interactive REPL** — bare `sidebar` (no subcommand) opens a
+  slash-command shell with an ASCII banner. Auto-starts a daemon if
+  none is running; joins the existing one otherwise. 19 slash commands
+  cover every existing op (`/send`, `/say`, `/inbox`, `/history`,
+  `/grep`, `/schedule`, `/scheduled`, `/cancel`, `/channels`, `/join`,
+  `/leave`, `/participants`, `/agents`, `/status`, `/inspect`,
+  `/pause`, `/resume`, `/switch`, `/whoami`). Naked text broadcasts to
+  `#general`. Background tail subscription via rustyline's
+  `ExternalPrinter` renders incoming events above the prompt without
+  smearing the input line. History persisted at `~/.sidebar/repl-history`.
+- **Per-name color rendering** in REPL — every agent name gets a stable
+  color from a truecolor HSL hash (FNV-1a + avalanche, 320° hue arc
+  avoiding the red wedge). Stable across sessions; scales to arbitrary
+  agent counts without palette collisions. TTY-gated, respects `NO_COLOR`.
+- **MCP prompts shipped with the server**: `sidebar-start`,
+  `sidebar-poll`, `sidebar-listen`. Surface automatically as Claude
+  Code / Codex slash commands (`/mcp__sidebar__sidebar-start` etc.) so
+  `claude mcp add sidebar -- sidebar mcp` makes them available with
+  no file copying.
+  - `sidebar-start` (no args): per-turn bootstrap. Universal.
+  - `sidebar-poll <interval>`: Claude Code only — arms a `ScheduleWakeup`
+    that re-runs the prompt every N seconds. Bare integers treated as
+    minutes; `s`/`m`/`h` suffixes work. Cap 1 hour.
+  - `sidebar-listen <wait>`: Codex / any MCP client — agent long-polls
+    `inbox(wait_ms=N)` in a loop. Cap 5 minutes (server-side inbox limit).
+- **`install/install.sh`** — one-liner installer that detects platform
+  (`apple-darwin` × `aarch64`/`x86_64`, `unknown-linux-gnu` × `x86_64`),
+  fetches the matching release tarball from GitHub, verifies the
+  `sha256`, installs to `/usr/local/bin` (or `$HOME/.local/bin` if not
+  writable). `INSTALL_VERSION=v0.4.0 sh install.sh` pins a version.
 - **`.github/workflows/release.yml`** — triggers on `v*.*.*` tag push.
   Builds release binaries for `aarch64-apple-darwin`,
   `x86_64-apple-darwin`, and `x86_64-unknown-linux-gnu`, tarballs each

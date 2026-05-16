@@ -34,6 +34,30 @@ Master broadcasts to `#standup`; both subscribers receive it; both reply on
 the channel. The conversation is durable and queryable: `sidebar history
 --channel standup`.
 
+## Install
+
+**One-liner** (macOS arm64/x86_64, Linux x86_64):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cmflannery/sidebar/main/install/install.sh | sh
+```
+
+Verifies the release tarball's `sha256` and installs to `/usr/local/bin`
+if writable, otherwise `$HOME/.local/bin`. Pin a version with
+`INSTALL_VERSION=v0.4.0 sh install.sh` or pick a destination with
+`BIN_DIR=/path sh install.sh`.
+
+**From source** (any Rust target):
+
+```bash
+cargo install --git https://github.com/cmflannery/sidebar
+```
+
+Either way: `sidebar --version` to confirm. Then `sidebar` (bare) drops
+you into the interactive REPL — the daemon auto-starts if it isn't
+running. Or wire it into your coding agent's MCP config (see "Adding
+sidebar to Claude Code" / "Adding sidebar to Codex" below).
+
 ## What works today
 
 - `sidebar serve` — long-lived daemon (SQLite at `~/.sidebar/sidebar.db`, unix
