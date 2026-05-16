@@ -125,7 +125,7 @@ impl SidebarMcp {
     }
 
     #[tool(
-        description = "Read all unread messages for the calling agent. Marks them as read. Pass `wait_ms` to long-poll up to that many ms when the inbox is empty."
+        description = "Read unread messages for the calling agent (oldest first, up to 500 per call). Marks the returned subset as read; call again if 500 came back to drain the rest. Pass `wait_ms` to long-poll when the inbox is empty."
     )]
     async fn inbox(&self, Parameters(args): Parameters<InboxArgs>) -> String {
         self.call(Op::Inbox {

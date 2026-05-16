@@ -26,6 +26,12 @@ pub const DEFAULT_CHANNEL: &str = "general";
 /// produce thousands of delivery rows.
 const MAX_MENTIONS_PER_MESSAGE: usize = 32;
 
+/// Cap on the number of messages a single `inbox` call returns. Unread
+/// messages don't expire (retention only touches read ones), so a long-
+/// idle agent could otherwise drain 10K+ rows in one response and OOM
+/// the serialization buffer. The caller drains incrementally.
+const MAX_INBOX_BATCH: usize = 500;
+
 #[derive(Clone)]
 pub struct Store {
     conn: Arc<Mutex<Connection>>,
@@ -319,6 +325,7 @@ impl Store {
             let now = Utc::now().to_rfc3339();
 
             let candidates: Vec<Message> = {
+                let batch_limit = i64::try_from(MAX_INBOX_BATCH).unwrap_or(i64::MAX);
                 let mut stmt = tx.prepare(
                     "SELECT m.id, fa.name AS from_name,
                             ta.name AS to_agent, tc.name AS to_channel, m.is_broadcast,
@@ -329,9 +336,10 @@ impl Store {
                      LEFT JOIN channels tc ON tc.id = m.to_channel
                      JOIN deliveries d ON d.message_id = m.id
                      WHERE d.agent_id = ?1 AND d.read_at IS NULL
-                     ORDER BY m.created_at ASC",
+                     ORDER BY m.created_at ASC
+                     LIMIT ?2",
                 )?;
-                stmt.query_map(params![agent_id], row_to_message)?
+                stmt.query_map(params![agent_id, batch_limit], row_to_message)?
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
 

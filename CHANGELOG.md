@@ -32,6 +32,12 @@ in 0.x).
   asserts `@<70-char>` no longer creates an agent.
 
 ### Changed
+- **Inbox batch cap: 500 messages per call.** Unread messages aren't
+  subject to retention (only read ones are), so a long-idle agent could
+  accumulate thousands of unread messages and a single `inbox` call
+  would return them all at once — OOM risk plus an unwieldy response.
+  Each call now returns the oldest 500 unread; marks only those read;
+  the caller drains incrementally by re-calling.
 - **Retention cleanup also prunes ended sessions** older than the
   retention cutoff. Live sessions (`ended_at IS NULL`) are kept. Was
   a slow leak: every MCP connection logged a row that was never

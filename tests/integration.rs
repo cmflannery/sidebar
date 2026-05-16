@@ -199,6 +199,32 @@ fn mentions_cannot_bypass_name_length_cap() {
 }
 
 #[test]
+fn inbox_batch_capped_at_500() {
+    let sb = Sandbox::new();
+    // 501 unread DMs to one agent.
+    for i in 0..501 {
+        sb.stdout(&["send", "@idle", &format!("msg-{i:03}")]);
+    }
+
+    let first = sb.stdout(&["inbox", "--as", "idle"]);
+    let line_count = first.lines().count();
+    assert_eq!(
+        line_count, 500,
+        "first batch should be 500, got {line_count}"
+    );
+
+    // Exactly 1 unread should remain for a second call.
+    let second = sb.stdout(&["inbox", "--as", "idle"]);
+    let remaining = second.lines().count();
+    assert_eq!(remaining, 1, "expected 1 leftover, got {remaining}");
+    assert!(second.contains("msg-500"), "wrong leftover: {second}");
+
+    // Third call is empty.
+    let third = sb.stdout(&["inbox", "--as", "idle"]);
+    assert!(third.is_empty(), "expected empty, got: {third:?}");
+}
+
+#[test]
 fn many_mentions_capped_at_32_recipients() {
     let sb = Sandbox::new();
     // Build a body with 50 distinct @-mentions.
