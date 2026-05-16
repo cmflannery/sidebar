@@ -139,12 +139,21 @@ fn unknown_subcommand_fails() {
 }
 
 #[test]
-fn pause_is_still_stubbed_and_errors_explicitly() {
+fn pause_blocks_sends_and_resume_unblocks() {
     let sb = Sandbox::new();
-    let out = sb.run(&["pause"]);
-    assert!(!out.status.success());
+    sb.stdout(&["pause"]);
+
+    // Send must fail with a clear message while paused.
+    let out = sb.run(&["send", "@nobody", "this should be rejected"]);
+    assert!(!out.status.success(), "send succeeded while paused");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("not yet implemented"), "stderr was: {err}");
+    assert!(err.contains("paused"), "expected paused error, got: {err}");
+
+    sb.stdout(&["resume"]);
+    // Now send works again.
+    sb.stdout(&["send", "@nobody", "ok now"]);
+    let history = sb.stdout(&["history", "--with", "nobody"]);
+    assert!(history.contains("ok now"));
 }
 
 #[test]
@@ -323,6 +332,73 @@ fn schedule_persists_across_daemon_restart() {
     let _ = daemon2.kill();
     let _ = daemon2.wait();
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The marquee end-to-end: two `sidebar mcp` stubs (alice + bob) communicate
+/// through the daemon. Alice sends via tools/call send; bob's tools/call
+/// inbox(wait_ms) returns alice's message.
+#[test]
+fn two_mcp_stubs_can_exchange_messages() {
+    let sb = Sandbox::new();
+
+    // Alice: register and send a DM to bob.
+    let alice_handshake = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"alice","version":"0.1"}}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"send","arguments":{"to":"@bob","body":"hello bob from alice"}}}"#,
+        "\n",
+    );
+    let alice_out = run_mcp_stub(&sb.home, "alice", alice_handshake);
+    assert!(
+        alice_out.contains("\"id\":2"),
+        "alice send had no response: {alice_out}"
+    );
+    // The message_id key is inside a JSON string field, so it's escaped.
+    assert!(
+        alice_out.contains("message_id"),
+        "alice send didn't return a message id: {alice_out}"
+    );
+
+    // Bob: long-poll inbox; alice's message should be sitting there from the
+    // moment bob registers (since DM was delivered before bob connected).
+    let bob_handshake = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"bob","version":"0.1"}}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"inbox","arguments":{"wait_ms":2000}}}"#,
+        "\n",
+    );
+    let bob_out = run_mcp_stub(&sb.home, "bob", bob_handshake);
+    assert!(
+        bob_out.contains("hello bob from alice"),
+        "bob's inbox missed alice's message: {bob_out}"
+    );
+    // Likewise: from-field is nested inside an escaped JSON string.
+    assert!(
+        bob_out.contains("alice"),
+        "bob's inbox didn't attribute to alice: {bob_out}"
+    );
+}
+
+fn run_mcp_stub(home: &std::path::Path, agent: &str, handshake: &str) -> String {
+    let mut child = Command::new(sidebar_bin())
+        .args(["mcp", "--as", agent])
+        .env("SIDEBAR_HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp stub");
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        Write::write_all(stdin, handshake.as_bytes()).unwrap();
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("wait mcp stub");
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 /// Regression: the MCP stub must start cleanly even when the daemon is down.

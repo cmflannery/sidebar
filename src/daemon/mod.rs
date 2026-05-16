@@ -60,14 +60,19 @@ pub async fn serve() -> Result<()> {
     let daemon = server::Daemon::new(store.clone());
 
     // Scheduler: polls pending scheduled rows and delivers due ones,
-    // emitting events through the broker for any subscribers.
+    // emitting events through the broker for any subscribers. Skips
+    // delivery while the daemon is paused.
     let scheduler_store = store.clone();
     let scheduler_events = daemon.events.clone();
+    let scheduler_paused = daemon.paused.clone();
     let scheduler_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(SCHEDULER_TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
+            if scheduler_paused.load(std::sync::atomic::Ordering::Acquire) {
+                continue;
+            }
             match scheduler_store.deliver_due().await {
                 Ok(delivered) => {
                     for d in delivered {

@@ -21,9 +21,20 @@ for read messages, sessions tracked across reconnects.
 
 ## What doesn't yet
 
-- `pause` / `resume`: stub.
 - Server-pushed MCP `notifications/message` for agents (we rely on `inbox`
-  polling instead — see "Wakeup pattern" below).
+  long-poll instead — see "Wakeup pattern" below).
+- A unique-name strategy for multiple Claude Code sessions sharing the
+  same MCP config — for now, set `SIDEBAR_AGENT_NAME` per terminal.
+
+## Master controls
+
+```bash
+sidebar pause     # rejects new sends; scheduler holds queued items
+sidebar resume    # release; queued scheduled rows fire on next tick
+```
+
+Use this when you want to inspect history or hand-edit state without
+agents racing the master.
 
 ## Scheduling
 
@@ -154,6 +165,18 @@ MCP stubs (`sidebar mcp`) are short-lived stdio processes that translate MCP
 tool calls into ops on the daemon socket. The CLI (`sidebar tail`,
 `sidebar send`, …) hits the same socket. Wire protocol is line-delimited
 JSON; see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+## Examples
+
+See [`examples/`](./examples):
+
+- `quickstart.sh` — runs a daemon in a sandbox, fires messages, shows tail.
+- `two-agents.sh` — drives two `sidebar mcp` stubs through JSON-RPC to
+  simulate two real agents (alice + bob) talking through the daemon.
+- `claude-commands/` — `/sidebar-start` and `/sidebar-check` slash command
+  definitions for Claude Code. Drop into `.claude/commands/`.
+- `codex-auto-approve.toml` — Codex config snippet to skip per-call MCP
+  approval prompts on sidebar tools.
 
 ## Development
 

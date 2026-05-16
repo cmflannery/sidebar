@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -24,12 +25,22 @@ use crate::types::Recipient;
 pub struct Daemon {
     pub store: Store,
     pub events: broadcast::Sender<Event>,
+    /// When true, Op::Send is rejected and scheduler deliveries are held.
+    pub paused: Arc<AtomicBool>,
 }
 
 impl Daemon {
     pub fn new(store: Store) -> Self {
         let (events, _rx) = broadcast::channel(256);
-        Self { store, events }
+        Self {
+            store,
+            events,
+            paused: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Acquire)
     }
 }
 
@@ -266,6 +277,7 @@ fn parse_id_best_effort(line: &str) -> u64 {
         .unwrap_or(0)
 }
 
+#[allow(clippy::too_many_lines)] // big match over all ops; splitting hurts readability more than it helps
 async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
     let id = req.id;
     let result: Result<ResponseData> = match req.op {
@@ -287,6 +299,14 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
             intent,
             reply_to,
         } => {
+            if daemon.is_paused() {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some("daemon is paused; resume with `sidebar resume`".into()),
+                    data: None,
+                };
+            }
             let recipient = Recipient::parse(&to);
             match daemon
                 .store
@@ -342,7 +362,16 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|id| ResponseData::SendOk { message_id: id })
         }
-        Op::Pause | Op::Resume => Err(anyhow::anyhow!("op not yet implemented")),
+        Op::Pause => {
+            daemon.paused.store(true, Ordering::Release);
+            let _ = daemon.events.send(Event::Paused);
+            Ok(ResponseData::SendOk { message_id: 0 })
+        }
+        Op::Resume => {
+            daemon.paused.store(false, Ordering::Release);
+            let _ = daemon.events.send(Event::Resumed);
+            Ok(ResponseData::SendOk { message_id: 0 })
+        }
     };
 
     match result {

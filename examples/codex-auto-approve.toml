@@ -1,0 +1,15 @@
+# Snippet for ~/.codex/config.toml — auto-approves sidebar's MCP tools so
+# they don't require per-call confirmation in interactive Codex sessions.
+#
+# Append to your existing config; do not replace it.
+
+[mcp_servers.sidebar.auto_approve]
+tools = [
+  "whoami",
+  "send",
+  "inbox",
+  "history",
+  "schedule",
+  "participants",
+  "channels",
+]

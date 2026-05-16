@@ -230,9 +230,19 @@ async fn history(channel: Option<String>, with: Option<String>, limit: usize) ->
 }
 
 async fn pause() -> Result<()> {
-    anyhow::bail!("pause not yet implemented")
+    toggle(Op::Pause, "paused").await
 }
 
 async fn resume() -> Result<()> {
-    anyhow::bail!("resume not yet implemented")
+    toggle(Op::Resume, "resumed").await
+}
+
+async fn toggle(op: Op, label: &str) -> Result<()> {
+    let mut client = Client::connect_as("master").await?;
+    let resp = client.request(op).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    println!("{label}");
+    Ok(())
 }
