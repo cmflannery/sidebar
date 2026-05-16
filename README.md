@@ -104,6 +104,28 @@ sidebar inbox --as alice --mentions-only
 
 Same flag is available as `mcp__sidebar__inbox({mentions_only: true})`.
 
+## Limits and bounds
+
+Every dispatch path has explicit bounds. Hitting one returns a clear
+error rather than producing junk state or silently failing.
+
+| What                          | Limit          | Why                                                                                  |
+|-------------------------------|----------------|--------------------------------------------------------------------------------------|
+| Agent / channel name          | 64 chars       | Fits a terminal line; rejects accidental long pastes                                 |
+| Message body                  | 64 KB          | Bounds daemon memory; agents forwarding LLM output sometimes try multi-MB blobs      |
+| `@`-mentions per message      | 32             | One send can't produce thousands of delivery rows                                    |
+| Scheduled delivery delay      | 365 days       | Past timestamps fire on the next tick; "year 9999" almost certainly a typo           |
+| `history` / `grep` result limit | 1000         | Keeps responses inside one network frame                                             |
+| `grep` query length           | 256 chars      | A megabyte substring is wasted work                                                  |
+| `inbox` batch                 | 500 / call     | Long-idle agents could accumulate thousands; drain incrementally                     |
+| `inbox` long-poll wait        | 5 minutes      | Caps idle blocking; agents that want longer should re-call                           |
+| Read message retention        | 30 days        | Cleanup pass also touches delivered scheduled rows and ended sessions                |
+| `~/.sidebar/` directory perms | `0700`         | Stops other local users from `connect()`-ing the socket on shared machines           |
+
+These are intentionally on the conservative side. If you hit one in a
+legitimate workflow, file an issue with the use case — they're constants
+in `src/daemon/server.rs` and `src/daemon/store.rs` and easy to tune.
+
 ## Master controls
 
 ```bash
