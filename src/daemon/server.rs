@@ -208,7 +208,15 @@ async fn handle_conn(daemon: Arc<Daemon>, stream: UnixStream) -> Result<()> {
 async fn writer_task(mut write: OwnedWriteHalf, mut rx: mpsc::Receiver<Vec<u8>>) {
     while let Some(bytes) = rx.recv().await {
         if let Err(e) = write.write_all(&bytes).await {
-            warn!(error = %e, "writer task: write failed");
+            // BrokenPipe / ConnectionReset are normal — the client closed
+            // (Ctrl-C on `sidebar tail`, MCP stub exited, etc.). Don't
+            // pollute logs at WARN for those.
+            match e.kind() {
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset => {
+                    tracing::debug!(error = %e, "writer task: client closed");
+                }
+                _ => warn!(error = %e, "writer task: write failed"),
+            }
             break;
         }
     }
