@@ -13,7 +13,7 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
     match cmd {
         Command::Serve => serve().await,
         Command::Mcp { as_name } => mcp(as_name).await,
-        Command::Tail { json } => tail(json).await,
+        Command::Tail { json, filter } => tail(json, filter).await,
         Command::Send { to, body } => send(to, body).await,
         Command::Schedule {
             to,
@@ -213,7 +213,7 @@ async fn mcp(as_name: Option<String>) -> Result<()> {
     crate::mcp::serve(name).await
 }
 
-async fn tail(json: bool) -> Result<()> {
+async fn tail(json: bool, filter: Option<String>) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::net::UnixStream;
@@ -237,13 +237,16 @@ async fn tail(json: bool) -> Result<()> {
     req_bytes.push(b'\n');
     write.write_all(&req_bytes).await?;
 
+    let filter_lower = filter.as_ref().map(|s| s.to_lowercase());
+
     // Read first frame: should be the Subscribe response. After that, events.
     while let Some(line) = reader.next_line().await? {
         if json {
+            // JSON mode skips filtering — scripts can grep on their side.
             println!("{line}");
             continue;
         }
-        match serde_json::from_str::<crate::proto::Event>(&line) {
+        let formatted = match serde_json::from_str::<crate::proto::Event>(&line) {
             Ok(crate::proto::Event::Message {
                 to,
                 from,
@@ -256,17 +259,26 @@ async fn tail(json: bool) -> Result<()> {
                     Recipient::Channel(n) => format!("#{n}"),
                     Recipient::Broadcast => "*".to_string(),
                 };
-                println!("[{now}] {from} → {to_label}: {body}");
+                Some(format!("[{now}] {from} → {to_label}: {body}"))
             }
-            Ok(crate::proto::Event::Paused) => {
-                println!("[{}] (paused)", chrono::Local::now().format("%H:%M:%S"));
-            }
-            Ok(crate::proto::Event::Resumed) => {
-                println!("[{}] (resumed)", chrono::Local::now().format("%H:%M:%S"));
-            }
+            Ok(crate::proto::Event::Paused) => Some(format!(
+                "[{}] (paused)",
+                chrono::Local::now().format("%H:%M:%S")
+            )),
+            Ok(crate::proto::Event::Resumed) => Some(format!(
+                "[{}] (resumed)",
+                chrono::Local::now().format("%H:%M:%S")
+            )),
             // Quietly ignore non-event frames (HelloAck, Subscribe ack).
-            Err(_) => {}
+            Err(_) => None,
+        };
+        let Some(line) = formatted else { continue };
+        if let Some(needle) = filter_lower.as_ref() {
+            if !line.to_lowercase().contains(needle) {
+                continue;
+            }
         }
+        println!("{line}");
     }
     Ok(())
 }

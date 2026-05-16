@@ -37,6 +37,12 @@ pub enum Command {
     Tail {
         #[arg(long)]
         json: bool,
+        /// Print only events whose default-format line contains this
+        /// substring (case-insensitive). Useful for `--filter @alice`
+        /// to watch only messages mentioning alice, or `#standup`
+        /// to scope to a channel. Ignored when --json is set.
+        #[arg(long)]
+        filter: Option<String>,
     },
 
     /// Send a message as `master` to an agent or channel.

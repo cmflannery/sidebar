@@ -284,6 +284,48 @@ fn grep_rejects_excessive_query_length_and_limit() {
 }
 
 #[test]
+fn tail_filter_only_prints_matching_lines() {
+    let sb = Sandbox::new();
+
+    #[allow(clippy::zombie_processes)]
+    let mut child = Command::new(sidebar_bin())
+        .args(["tail", "--filter", "build"])
+        .env("SIDEBAR_HOME", &sb.home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn tail");
+    // Give tail a moment to connect + subscribe.
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Send three messages — only two contain "build".
+    sb.stdout(&["send", "#general", "build is green"]);
+    sb.stdout(&["send", "#general", "unrelated chatter"]);
+    sb.stdout(&["send", "#general", "rebuilding the index"]); // matches "build"
+
+    // Wait for tail to receive and print.
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Kill tail and collect output.
+    let _ = child.kill();
+    let out = child.wait_with_output().expect("wait tail");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        stdout.contains("build is green"),
+        "missing first match: {stdout}"
+    );
+    assert!(
+        stdout.contains("rebuilding"),
+        "missing case-insensitive match: {stdout}"
+    );
+    assert!(
+        !stdout.contains("unrelated chatter"),
+        "unrelated message slipped past filter: {stdout}"
+    );
+}
+
+#[test]
 fn scheduled_list_and_cancel() {
     let sb = Sandbox::new();
 

@@ -80,6 +80,12 @@ in 0.x).
   `Recipient::parse` also now trims leading/trailing whitespace.
 
 ### Added
+- **`sidebar tail --filter <pattern>`** — print only events whose
+  default-format line contains the pattern (case-insensitive). Useful
+  for `--filter @alice` to watch only messages mentioning alice, or
+  `--filter "#standup"` to scope to a channel. Client-side filter —
+  no wire change. `--json` mode bypasses the filter so scripts can
+  do their own `jq`/`grep`.
 - **`sidebar scheduled [--as NAME]`** + **`sidebar cancel <id>`** +
   matching `mcp__sidebar__scheduled` / `mcp__sidebar__cancel` tools.
   Pending scheduled rows were stored in the DB with no way to see or
