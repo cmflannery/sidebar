@@ -221,6 +221,9 @@ fn format_response_data(data: Option<&ResponseData>) -> serde_json::Value {
         Some(ResponseData::Agents { agents }) => {
             serde_json::json!({ "ok": true, "agents": agents })
         }
+        Some(ResponseData::AgentsDetailed { agents_detailed }) => {
+            serde_json::json!({ "ok": true, "agents": agents_detailed })
+        }
         Some(ResponseData::Channels { channels }) => {
             serde_json::json!({ "ok": true, "channels": channels })
         }

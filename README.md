@@ -51,12 +51,16 @@ reports each agent's actual name.
 ## Inspecting state
 
 ```bash
-sidebar status
+sidebar status              # human-readable
+sidebar status --json       # machine-readable
+
+sidebar agents              # active agents with last_seen, e.g. "claude-code  3m ago"
+sidebar agents --all        # include agents not seen in the last 7 days
+sidebar agents --json       # JSON array of {name, first_seen, last_seen}
 ```
 
-Shows daemon uptime, pause state, agent / channel counts, unread total,
-pending scheduled rows, and the socket / db paths. When the daemon is
-down, prints a friendly hint instead of an error.
+When the daemon is down, `status` prints a friendly hint instead of
+erroring (`--json` form emits `{"daemon":"down","error":"..."}`).
 
 ## Master controls
 

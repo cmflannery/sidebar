@@ -344,6 +344,14 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
             .map(|rows| ResponseData::Agents {
                 agents: rows.into_iter().map(|a| a.name).collect(),
             }),
+        Op::Agents { include_stale } => {
+            let stale_after = chrono::Duration::days(7);
+            daemon
+                .store
+                .list_agents_detailed(include_stale, stale_after)
+                .await
+                .map(|agents_detailed| ResponseData::AgentsDetailed { agents_detailed })
+        }
         Op::Channels => daemon
             .store
             .list_channels()

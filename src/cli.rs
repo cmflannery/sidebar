@@ -25,6 +25,7 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Inbox { as_name, wait_ms } => inbox(as_name, wait_ms).await,
         Command::Say { body } => say(body).await,
         Command::Participants => participants().await,
+        Command::Agents { all, json } => agents(all, json).await,
         Command::History {
             channel,
             with,
@@ -32,16 +33,23 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         } => history(channel, with, limit).await,
         Command::Pause => pause().await,
         Command::Resume => resume().await,
-        Command::Status => status().await,
+        Command::Status { json } => status(json).await,
     }
 }
 
-async fn status() -> Result<()> {
+async fn status(json: bool) -> Result<()> {
     let mut client = match Client::connect_as("master").await {
         Ok(c) => c,
         Err(e) => {
-            println!("daemon: not running ({e})");
-            println!("start it with `sidebar serve` in another terminal");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "daemon": "down", "error": e.to_string() })
+                );
+            } else {
+                println!("daemon: not running ({e})");
+                println!("start it with `sidebar serve` in another terminal");
+            }
             return Ok(());
         }
     };
@@ -52,6 +60,10 @@ async fn status() -> Result<()> {
     let Some(ResponseData::Status(s)) = resp.data else {
         anyhow::bail!("unexpected response: {resp:?}");
     };
+    if json {
+        println!("{}", serde_json::to_string(&s)?);
+        return Ok(());
+    }
     let h = s.uptime_seconds / 3600;
     let m = (s.uptime_seconds % 3600) / 60;
     let sec = s.uptime_seconds % 60;
@@ -65,6 +77,57 @@ async fn status() -> Result<()> {
     println!("socket:      {}", s.socket_path);
     println!("db:          {}", s.db_path);
     Ok(())
+}
+
+async fn agents(all: bool, json: bool) -> Result<()> {
+    let mut client = Client::connect_as("master").await?;
+    let resp = client.request(Op::Agents { include_stale: all }).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    let Some(ResponseData::AgentsDetailed { agents_detailed }) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    if json {
+        println!("{}", serde_json::to_string(&agents_detailed)?);
+        return Ok(());
+    }
+    if agents_detailed.is_empty() {
+        println!("(no agents seen in the last 7 days; --all to include stale)");
+        return Ok(());
+    }
+    let now = chrono::Utc::now();
+    let name_w = agents_detailed
+        .iter()
+        .map(|a| a.name.len())
+        .max()
+        .unwrap_or(4);
+    println!("{:<name_w$}  last seen", "NAME");
+    for a in agents_detailed {
+        let delta = now.signed_duration_since(a.last_seen);
+        let rel = format_relative(delta);
+        println!("{:<name_w$}  {rel}", a.name);
+    }
+    Ok(())
+}
+
+fn format_relative(d: chrono::Duration) -> String {
+    let s = d.num_seconds();
+    if s < 5 {
+        return "just now".into();
+    }
+    if s < 60 {
+        return format!("{s}s ago");
+    }
+    let m = d.num_minutes();
+    if m < 60 {
+        return format!("{m}m ago");
+    }
+    let h = d.num_hours();
+    if h < 48 {
+        return format!("{h}h ago");
+    }
+    format!("{}d ago", d.num_days())
 }
 
 async fn serve() -> Result<()> {

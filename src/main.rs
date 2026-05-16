@@ -74,8 +74,18 @@ pub enum Command {
     /// Broadcast a message as `master`.
     Say { body: String },
 
-    /// List known participants.
+    /// List known participants (names only).
     Participants,
+
+    /// Table view of agents with first/last-seen times.
+    Agents {
+        /// Include agents not seen in the last 7 days.
+        #[arg(long)]
+        all: bool,
+        /// Emit a JSON array instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Print history (channel or DM thread).
     History {
@@ -94,7 +104,11 @@ pub enum Command {
     Resume,
 
     /// Show daemon health, counts, and paths.
-    Status,
+    Status {
+        /// Emit JSON instead of a key/value table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]

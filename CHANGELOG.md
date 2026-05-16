@@ -8,6 +8,15 @@ in 0.x).
 ## [Unreleased]
 
 ### Added
+- **`sidebar agents [--all] [--json]`** — table view of agents with
+  human-readable last-seen times (`just now`, `42s ago`, `3h ago`,
+  `12d ago`). Default hides agents not seen in the last 7 days; `--all`
+  overrides. `--json` emits an array of `{name, first_seen, last_seen}`
+  for scripting.
+- **`sidebar status --json`** — same StatusInfo struct as the table
+  form, machine-readable.
+- New wire op `Op::Agents { include_stale }` and response variant
+  `ResponseData::AgentsDetailed { agents_detailed }`.
 - `install/` directory with `com.sidebar.daemon.plist` (launchd, macOS)
   and `sidebar.service` (systemd user unit, Linux), plus an
   `install/README.md` with copy-paste setup steps.

@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use chrono::{DateTime, Utc};
+
 use crate::types::{Intent, Message, Recipient};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +69,12 @@ pub enum Op {
         when: When,
     },
     Participants,
+    /// Richer agent listing with first_seen / last_seen timestamps. Defaults
+    /// to hiding agents not seen in `stale_threshold_seconds`.
+    Agents {
+        #[serde(default)]
+        include_stale: bool,
+    },
     Channels,
     Pause,
     Resume,
@@ -104,8 +112,16 @@ pub enum ResponseData {
     SendOk { message_id: i64 },
     Messages { messages: Vec<Message> },
     Agents { agents: Vec<String> },
+    AgentsDetailed { agents_detailed: Vec<AgentDetails> },
     Channels { channels: Vec<String> },
     Status(StatusInfo),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentDetails {
+    pub name: String,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

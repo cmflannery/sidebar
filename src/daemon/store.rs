@@ -92,6 +92,44 @@ impl Store {
         .await?
     }
 
+    /// List agents with rich detail (first_seen, last_seen). If `include_stale`
+    /// is false, hides agents whose `last_seen` is older than `stale_after`.
+    pub async fn list_agents_detailed(
+        &self,
+        include_stale: bool,
+        stale_after: chrono::Duration,
+    ) -> Result<Vec<crate::proto::AgentDetails>> {
+        let conn = self.conn.clone();
+        let cutoff = (Utc::now() - stale_after).to_rfc3339();
+        tokio::task::spawn_blocking(move || -> Result<Vec<crate::proto::AgentDetails>> {
+            let conn = conn.blocking_lock();
+            let (sql, params): (&str, Vec<&dyn rusqlite::ToSql>) = if include_stale {
+                (
+                    "SELECT name, first_seen, last_seen FROM agents ORDER BY last_seen DESC",
+                    vec![],
+                )
+            } else {
+                (
+                    "SELECT name, first_seen, last_seen FROM agents
+                     WHERE last_seen >= ?1 ORDER BY last_seen DESC",
+                    vec![&cutoff],
+                )
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(params), |r| {
+                    Ok(crate::proto::AgentDetails {
+                        name: r.get(0)?,
+                        first_seen: parse_ts(&r.get::<_, String>(1)?),
+                        last_seen: parse_ts(&r.get::<_, String>(2)?),
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await?
+    }
+
     /// List all known agents.
     pub async fn list_agents(&self) -> Result<Vec<AgentRow>> {
         let conn = self.conn.clone();

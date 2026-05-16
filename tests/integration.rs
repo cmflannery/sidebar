@@ -188,6 +188,45 @@ fn status_reports_friendly_message_when_daemon_down() {
 }
 
 #[test]
+fn agents_command_shows_last_seen() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@alice", "hi"]);
+    sb.stdout(&["send", "@bob", "hi"]);
+
+    let table = sb.stdout(&["agents"]);
+    assert!(table.contains("NAME"), "missing header: {table}");
+    assert!(table.contains("alice"), "missing alice: {table}");
+    assert!(table.contains("bob"), "missing bob: {table}");
+    // Times should be human-readable.
+    assert!(
+        table.contains("just now") || table.contains("s ago"),
+        "missing relative time: {table}"
+    );
+
+    let json = sb.stdout(&["agents", "--json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let arr = parsed.as_array().expect("JSON array");
+    let names: Vec<&str> = arr
+        .iter()
+        .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+        .collect();
+    assert!(names.contains(&"alice"));
+    assert!(names.contains(&"bob"));
+}
+
+#[test]
+fn status_json_is_well_formed() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@iris", "msg1"]);
+
+    let json = sb.stdout(&["status", "--json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(parsed["paused"], false);
+    assert!(parsed["unread_count"].as_i64().unwrap() >= 1);
+    assert!(parsed["socket_path"].as_str().is_some());
+}
+
+#[test]
 fn pause_blocks_sends_and_resume_unblocks() {
     let sb = Sandbox::new();
     sb.stdout(&["pause"]);
