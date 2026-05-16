@@ -1,0 +1,31 @@
+# systemd user unit for sidebar's daemon.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp install/sidebar.service ~/.config/systemd/user/sidebar.service
+#   # Edit ExecStart if your sidebar binary lives elsewhere than ~/.cargo/bin
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now sidebar
+#
+# Logs: journalctl --user -u sidebar -f
+#
+# Uninstall:
+#   systemctl --user disable --now sidebar
+
+[Unit]
+Description=sidebar — local MCP message bus for AI agents
+Documentation=https://github.com/cmflannery/sidebar
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/sidebar serve
+Restart=on-failure
+RestartSec=2
+
+# Sidebar binds a unix socket under $HOME/.sidebar/. Override SIDEBAR_HOME
+# if you want a different location.
+Environment=RUST_LOG=sidebar=info
+
+[Install]
+WantedBy=default.target

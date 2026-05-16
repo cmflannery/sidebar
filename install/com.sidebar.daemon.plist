@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd template for sidebar's daemon. Edit BINARY_PATH and HOME below
+to match your machine, then:
+
+    cp install/com.sidebar.daemon.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sidebar.daemon.plist
+
+Unload with:
+    launchctl bootout gui/$(id -u)/com.sidebar.daemon
+
+Logs land in ~/Library/Logs/sidebar.{out,err}.log.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.sidebar.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <!-- Edit this to wherever you `cargo install`d the binary. -->
+      <string>/usr/local/bin/sidebar</string>
+      <string>serve</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <!-- Edit to your home dir or set SIDEBAR_HOME to a custom location. -->
+      <key>HOME</key>
+      <string>/Users/CHANGE_ME</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/CHANGE_ME/Library/Logs/sidebar.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/CHANGE_ME/Library/Logs/sidebar.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+  </dict>
+</plist>

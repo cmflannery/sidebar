@@ -7,6 +7,13 @@ in 0.x).
 
 ## [Unreleased]
 
+### Added
+- `install/` directory with `com.sidebar.daemon.plist` (launchd, macOS)
+  and `sidebar.service` (systemd user unit, Linux), plus an
+  `install/README.md` with copy-paste setup steps.
+- CI smoke step: `cargo install --path . --root /tmp/...` then exercises
+  the installed binary's `--help` to confirm subcommands surface.
+
 ## [0.3.0] – 2026-05-16
 
 ### Added

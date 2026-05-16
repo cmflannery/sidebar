@@ -31,3 +31,12 @@ jobs:
 
       - name: test
         run: cargo test --all-features
+
+      - name: install smoke test
+        # Prove `cargo install --path .` works and produces a runnable binary.
+        run: |
+          cargo install --path . --root /tmp/sidebar-install --locked
+          /tmp/sidebar-install/bin/sidebar --version
+          /tmp/sidebar-install/bin/sidebar --help | grep -q "serve"
+          /tmp/sidebar-install/bin/sidebar --help | grep -q "mcp"
+          /tmp/sidebar-install/bin/sidebar --help | grep -q "status"

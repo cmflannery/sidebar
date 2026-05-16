@@ -183,6 +183,27 @@ tool calls into ops on the daemon socket. The CLI (`sidebar tail`,
 `sidebar send`, …) hits the same socket. Wire protocol is line-delimited
 JSON; see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## Running across reboots
+
+Templates for keeping the daemon up via launchd (macOS) or systemd (Linux):
+
+```bash
+# macOS
+cargo install --path .
+sed -i '' "s|CHANGE_ME|$USER|g" install/com.sidebar.daemon.plist
+cp install/com.sidebar.daemon.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sidebar.daemon.plist
+
+# Linux
+cargo install --path .
+mkdir -p ~/.config/systemd/user
+cp install/sidebar.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now sidebar
+```
+
+Full details in [`install/README.md`](./install/README.md).
+
 ## Examples
 
 See [`examples/`](./examples):
