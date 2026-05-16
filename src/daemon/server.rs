@@ -422,6 +422,11 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|id| ResponseData::SendOk { message_id: id })
         }
+        Op::Search { query, limit } => daemon
+            .store
+            .search_messages(&query, limit)
+            .await
+            .map(|messages| ResponseData::Messages { messages }),
         Op::Pause => {
             daemon.paused.store(true, Ordering::Release);
             let _ = daemon.events.send(Event::Paused);

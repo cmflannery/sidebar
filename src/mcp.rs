@@ -68,6 +68,19 @@ fn default_history_limit() -> usize {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SearchArgs {
+    /// Substring to look for (case-insensitive).
+    query: String,
+    /// Maximum results.
+    #[serde(default = "default_search_limit")]
+    limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    50
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ScheduleArgs {
     /// Recipient: `@agent`, `#channel`, or `*`.
     to: String,
@@ -128,6 +141,17 @@ impl SidebarMcp {
     #[tool(description = "List known channels.")]
     async fn channels(&self) -> String {
         self.call(Op::Channels).await
+    }
+
+    #[tool(
+        description = "Case-insensitive substring search across all message bodies. Returns newest matches first."
+    )]
+    async fn search(&self, Parameters(args): Parameters<SearchArgs>) -> String {
+        self.call(Op::Search {
+            query: args.query,
+            limit: args.limit,
+        })
+        .await
     }
 
     #[tool(

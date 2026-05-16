@@ -188,6 +188,52 @@ fn status_reports_friendly_message_when_daemon_down() {
 }
 
 #[test]
+fn grep_finds_message_bodies_case_insensitive() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@team", "The Build Is Green"]);
+    sb.stdout(&["send", "@team", "rebooting now"]);
+    sb.stdout(&["send", "@team", "build failed at step 3"]);
+
+    let out = sb.stdout(&["grep", "build"]);
+    assert!(out.contains("Build Is Green"), "missing first match: {out}");
+    assert!(out.contains("build failed"), "missing second match: {out}");
+    assert!(!out.contains("rebooting"), "unrelated message in match: {out}");
+
+    // JSON shape
+    let json = sb.stdout(&["grep", "BUILD", "--json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(parsed.as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn participants_supports_json() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@xena", "hi"]);
+    let json = sb.stdout(&["participants", "--json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let names: Vec<&str> = parsed.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    assert!(names.contains(&"master"));
+    assert!(names.contains(&"xena"));
+}
+
+#[test]
+fn history_supports_json() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "#general", "alpha"]);
+    sb.stdout(&["send", "#general", "beta"]);
+    let json = sb.stdout(&["history", "--channel", "general", "--json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let bodies: Vec<&str> = parsed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.get("body").and_then(|b| b.as_str()))
+        .collect();
+    assert!(bodies.contains(&"alpha"));
+    assert!(bodies.contains(&"beta"));
+}
+
+#[test]
 fn agents_command_shows_last_seen() {
     let sb = Sandbox::new();
     sb.stdout(&["send", "@alice", "hi"]);

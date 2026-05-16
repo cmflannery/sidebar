@@ -515,6 +515,33 @@ impl Store {
         .await?
     }
 
+    /// Case-insensitive substring search over message bodies. Newest-first.
+    pub async fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<Message>> {
+        let conn = self.conn.clone();
+        let pattern = format!("%{query}%");
+        let lim = i64::try_from(limit).unwrap_or(i64::MAX);
+        tokio::task::spawn_blocking(move || -> Result<Vec<Message>> {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn.prepare(
+                "SELECT m.id, fa.name AS from_name,
+                        ta.name AS to_agent, tc.name AS to_channel, m.is_broadcast,
+                        m.body, m.intent, m.reply_to, m.created_at
+                 FROM messages m
+                 JOIN agents fa ON fa.id = m.from_agent
+                 LEFT JOIN agents ta ON ta.id = m.to_agent
+                 LEFT JOIN channels tc ON tc.id = m.to_channel
+                 WHERE m.body LIKE ?1 COLLATE NOCASE
+                 ORDER BY m.created_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![pattern, lim], row_to_message)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await?
+    }
+
     /// Delete read messages older than `retention_days`. Returns rows deleted.
     pub async fn cleanup_old(&self, retention_days: i64) -> Result<usize> {
         let conn = self.conn.clone();

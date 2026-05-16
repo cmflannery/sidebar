@@ -8,6 +8,14 @@ in 0.x).
 ## [Unreleased]
 
 ### Added
+- **`sidebar grep <query>`** + **`mcp__sidebar__search`** — case-insensitive
+  substring search across all message bodies. Returns newest matches
+  first, capped (default 50, configurable with `--limit`). Useful for
+  agents looking up earlier conversation context and for humans
+  debugging a chatty session.
+- **`--json` flag** on `participants`, `inbox`, `history`, and `grep`
+  (in addition to the `agents` / `status` flags landed last iteration).
+  Same JSON shapes as the corresponding MCP tools return.
 - **`sidebar agents [--all] [--json]`** — table view of agents with
   human-readable last-seen times (`just now`, `42s ago`, `3h ago`,
   `12d ago`). Default hides agents not seen in the last 7 days; `--all`

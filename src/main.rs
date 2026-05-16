@@ -69,13 +69,18 @@ pub enum Command {
         /// Long-poll up to this many milliseconds for new messages.
         #[arg(long)]
         wait_ms: Option<u64>,
+        #[arg(long)]
+        json: bool,
     },
 
     /// Broadcast a message as `master`.
     Say { body: String },
 
     /// List known participants (names only).
-    Participants,
+    Participants {
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Table view of agents with first/last-seen times.
     Agents {
@@ -95,6 +100,18 @@ pub enum Command {
         with: Option<String>,
         #[arg(long, default_value_t = 50)]
         limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Search message bodies for a substring (case-insensitive).
+    Grep {
+        /// Substring to look for.
+        query: String,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
     },
 
     /// Hold new message delivery.

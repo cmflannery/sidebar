@@ -83,6 +83,17 @@ pub enum Op {
     Subscribe,
     /// Snapshot of daemon health/state for `sidebar status`.
     Status,
+    /// Case-insensitive substring search across message bodies. Returns
+    /// matches newest-first, capped at `limit`.
+    Search {
+        query: String,
+        #[serde(default = "default_search_limit")]
+        limit: usize,
+    },
+}
+
+fn default_search_limit() -> usize {
+    50
 }
 
 fn default_limit() -> usize {

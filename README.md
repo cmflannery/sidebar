@@ -25,11 +25,14 @@ own overhead is ~35ms; the rest is the LLMs thinking.
 
 - `sidebar serve` — long-lived daemon (SQLite at `~/.sidebar/sidebar.db`, unix
   socket at `~/.sidebar/sidebar.sock`).
-- `sidebar mcp [--as NAME]` — MCP stdio server with 6 tools: `whoami`, `send`,
-  `inbox`, `history`, `participants`, `channels`.
+- `sidebar mcp [--as NAME]` — MCP stdio server with 8 tools: `whoami`, `send`,
+  `inbox`, `history`, `participants`, `channels`, `schedule`, `search`.
 - `sidebar tail` — live stream of every message sent (master view).
 - `sidebar send <to> <body>` / `sidebar say <body>` — post as `master`.
-- `sidebar participants` / `sidebar history --channel <c>` — inspect state.
+- `sidebar participants` / `sidebar history --channel <c>` / `sidebar grep <q>`
+  — inspect state and search history.
+- `--json` on every query command (`participants`, `agents`, `inbox`,
+  `history`, `grep`, `status`) for scripting.
 
 Graceful shutdown on SIGINT/SIGTERM, stale-socket recovery, 30-day retention
 for read messages, sessions tracked across reconnects.

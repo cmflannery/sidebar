@@ -22,15 +22,21 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
             at,
             as_name,
         } => schedule(to, body, in_seconds, at, as_name).await,
-        Command::Inbox { as_name, wait_ms } => inbox(as_name, wait_ms).await,
+        Command::Inbox {
+            as_name,
+            wait_ms,
+            json,
+        } => inbox(as_name, wait_ms, json).await,
         Command::Say { body } => say(body).await,
-        Command::Participants => participants().await,
+        Command::Participants { json } => participants(json).await,
         Command::Agents { all, json } => agents(all, json).await,
         Command::History {
             channel,
             with,
             limit,
-        } => history(channel, with, limit).await,
+            json,
+        } => history(channel, with, limit, json).await,
+        Command::Grep { query, limit, json } => grep(query, limit, json).await,
         Command::Pause => pause().await,
         Command::Resume => resume().await,
         Command::Status { json } => status(json).await,
@@ -215,30 +221,48 @@ async fn send(to: String, body: String) -> Result<()> {
     Ok(())
 }
 
-async fn inbox(as_name: String, wait_ms: Option<u64>) -> Result<()> {
+async fn inbox(as_name: String, wait_ms: Option<u64>, json: bool) -> Result<()> {
     let mut client = Client::connect_as(&as_name).await?;
     let resp = client.request(Op::Inbox { wait_ms }).await?;
     if !resp.ok {
         anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
     }
-    match resp.data {
-        Some(ResponseData::Messages { messages }) => {
-            for m in messages {
-                let to_label = match m.to {
-                    Recipient::Agent(n) => format!("@{n}"),
-                    Recipient::Channel(n) => format!("#{n}"),
-                    Recipient::Broadcast => "*".to_string(),
-                };
-                let ts = m
-                    .created_at
-                    .with_timezone(&chrono::Local)
-                    .format("%H:%M:%S");
-                println!("[{ts}] {} → {to_label}: {}", m.from, m.body);
-            }
-            Ok(())
-        }
-        other => anyhow::bail!("unexpected response data: {other:?}"),
+    let Some(ResponseData::Messages { messages }) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    print_messages(&messages, json)
+}
+
+fn print_messages(messages: &[crate::types::Message], json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(messages)?);
+        return Ok(());
     }
+    for m in messages {
+        let to_label = match &m.to {
+            Recipient::Agent(n) => format!("@{n}"),
+            Recipient::Channel(n) => format!("#{n}"),
+            Recipient::Broadcast => "*".to_string(),
+        };
+        let ts = m
+            .created_at
+            .with_timezone(&chrono::Local)
+            .format("%H:%M:%S");
+        println!("[{ts}] {} → {to_label}: {}", m.from, m.body);
+    }
+    Ok(())
+}
+
+async fn grep(query: String, limit: usize, json: bool) -> Result<()> {
+    let mut client = Client::connect_as("master").await?;
+    let resp = client.request(Op::Search { query, limit }).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    let Some(ResponseData::Messages { messages }) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    print_messages(&messages, json)
 }
 
 async fn say(body: String) -> Result<()> {
@@ -276,24 +300,31 @@ async fn schedule(
     Ok(())
 }
 
-async fn participants() -> Result<()> {
+async fn participants(json: bool) -> Result<()> {
     let mut client = Client::connect_as("master").await?;
     let resp = client.request(Op::Participants).await?;
     if !resp.ok {
         anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
     }
-    match resp.data {
-        Some(ResponseData::Agents { agents }) => {
-            for a in agents {
-                println!("{a}");
-            }
-            Ok(())
+    let Some(ResponseData::Agents { agents }) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    if json {
+        println!("{}", serde_json::to_string(&agents)?);
+    } else {
+        for a in agents {
+            println!("{a}");
         }
-        other => anyhow::bail!("unexpected response data: {other:?}"),
     }
+    Ok(())
 }
 
-async fn history(channel: Option<String>, with: Option<String>, limit: usize) -> Result<()> {
+async fn history(
+    channel: Option<String>,
+    with: Option<String>,
+    limit: usize,
+    json: bool,
+) -> Result<()> {
     let mut client = Client::connect_as("master").await?;
     let resp = client
         .request(Op::History {
@@ -305,24 +336,10 @@ async fn history(channel: Option<String>, with: Option<String>, limit: usize) ->
     if !resp.ok {
         anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
     }
-    match resp.data {
-        Some(ResponseData::Messages { messages }) => {
-            for m in messages {
-                let to_label = match m.to {
-                    Recipient::Agent(n) => format!("@{n}"),
-                    Recipient::Channel(n) => format!("#{n}"),
-                    Recipient::Broadcast => "*".to_string(),
-                };
-                let ts = m
-                    .created_at
-                    .with_timezone(&chrono::Local)
-                    .format("%H:%M:%S");
-                println!("[{ts}] {} → {to_label}: {}", m.from, m.body);
-            }
-            Ok(())
-        }
-        other => anyhow::bail!("unexpected response data: {other:?}"),
-    }
+    let Some(ResponseData::Messages { messages }) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    print_messages(&messages, json)
 }
 
 async fn pause() -> Result<()> {
