@@ -336,7 +336,7 @@ impl Store {
                      LEFT JOIN channels tc ON tc.id = m.to_channel
                      JOIN deliveries d ON d.message_id = m.id
                      WHERE d.agent_id = ?1 AND d.read_at IS NULL
-                     ORDER BY m.created_at ASC
+                     ORDER BY m.created_at ASC, m.id ASC
                      LIMIT ?2",
                 )?;
                 stmt.query_map(params![agent_id, batch_limit], row_to_message)?
@@ -409,7 +409,7 @@ impl Store {
                  LEFT JOIN agents ta ON ta.id = m.to_agent
                  LEFT JOIN channels tc ON tc.id = m.to_channel
                  WHERE m.to_channel = ?1
-                 ORDER BY m.created_at DESC
+                 ORDER BY m.created_at DESC, m.id DESC
                  LIMIT ?2",
             )?;
             let mut rows = stmt
@@ -442,7 +442,7 @@ impl Store {
                  LEFT JOIN channels tc ON tc.id = m.to_channel
                  WHERE (m.from_agent = ?1 AND m.to_agent = ?2)
                     OR (m.from_agent = ?2 AND m.to_agent = ?1)
-                 ORDER BY m.created_at DESC
+                 ORDER BY m.created_at DESC, m.id DESC
                  LIMIT ?3",
             )?;
             let mut rows = stmt
@@ -743,7 +743,7 @@ impl Store {
                  LEFT JOIN agents ta ON ta.id = m.to_agent
                  LEFT JOIN channels tc ON tc.id = m.to_channel
                  WHERE m.body LIKE ?1 COLLATE NOCASE
-                 ORDER BY m.created_at DESC
+                 ORDER BY m.created_at DESC, m.id DESC
                  LIMIT ?2",
             )?;
             let rows = stmt
