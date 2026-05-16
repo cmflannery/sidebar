@@ -14,6 +14,16 @@ in 0.x).
   with its `sha256` sum, and attaches them to the GitHub Release.
 
 ### Changed
+- **Mentions per message capped at 32.** A 64 KB body could technically
+  hold thousands of `@x` tokens; the daemon now resolves at most 32 of
+  them as recipients. The message body still contains all tokens — only
+  the additional `deliveries` rows are bounded.
+- **Sidebar home directory is `chmod 0700` on Unix.** The directory
+  holding the unix socket and SQLite DB used to inherit the user's
+  umask, so on shared machines other local users could potentially
+  connect the socket and impersonate any agent. Now restricted to the
+  owning user on `ensure_home`. Best-effort: a warning is logged
+  if `chmod` fails (NFS / fuse mounts that ignore it).
 - **Cap on `history` and `grep` result limits**: 1000 messages.
   Larger requests return `limit N exceeds max of 1000`.
 - **Cap on `grep` query length**: 256 characters. A 1 MB substring

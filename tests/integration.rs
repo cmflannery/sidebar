@@ -158,6 +158,46 @@ fn join_rejects_overlong_channel_name() {
     assert!(!out.status.success(), "overlong channel name should fail");
 }
 
+#[cfg(unix)]
+#[test]
+fn home_dir_is_chmod_0700() {
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let meta = std::fs::metadata(&sb.home).expect("stat home");
+    let mode = meta.permissions().mode() & 0o7777;
+    assert_eq!(mode, 0o700, "home dir mode is {mode:o}, want 0o700");
+}
+
+#[test]
+fn many_mentions_capped_at_32_recipients() {
+    let sb = Sandbox::new();
+    // Build a body with 50 distinct @-mentions.
+    let body = (0..50)
+        .map(|i| format!("@m{i:02}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    sb.stdout(&["send", "#general", &body]);
+
+    // First 32 mentions should have been created as agents (in body order).
+    let parts = sb.stdout(&["participants"]);
+    let names: Vec<&str> = parts.lines().filter(|l| !l.is_empty()).collect();
+    let mention_agents: Vec<&&str> = names
+        .iter()
+        .filter(|n| n.starts_with('m') && n.len() == 3)
+        .collect();
+    assert_eq!(
+        mention_agents.len(),
+        32,
+        "expected 32 mention agents to be created, got {}: {parts}",
+        mention_agents.len()
+    );
+    // The 33rd mention (m32) onward should NOT have been created.
+    assert!(
+        !parts.contains("\nm32\n") && !parts.contains("\nm49\n"),
+        "uncapped mention escaped: {parts}"
+    );
+}
+
 #[test]
 fn history_rejects_excessive_limit() {
     let sb = Sandbox::new();

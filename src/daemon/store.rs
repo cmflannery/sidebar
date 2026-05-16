@@ -21,6 +21,10 @@ const SCHEMA: &str = include_str!("schema.sql");
 pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 /// Channel everyone joins on first sight.
 pub const DEFAULT_CHANNEL: &str = "general";
+/// Cap on `@`-mentions resolved per send. A 64 KB body can technically
+/// hold thousands of `@x` tokens; we don't want one runaway message to
+/// produce thousands of delivery rows.
+const MAX_MENTIONS_PER_MESSAGE: usize = 32;
 
 #[derive(Clone)]
 pub struct Store {
@@ -266,8 +270,13 @@ impl Store {
             // channel. DM mentions are redundant (the target already gets
             // it) so we skip there. The recipient agent is created on the
             // fly if it doesn't exist yet — same affordance as `send @new`.
+            // Capped to MAX_MENTIONS_PER_MESSAGE to keep one runaway send
+            // from generating thousands of delivery rows.
             if !matches!(&to, Recipient::Agent(_)) {
-                for name in extract_mentions(&body) {
+                for name in extract_mentions(&body)
+                    .into_iter()
+                    .take(MAX_MENTIONS_PER_MESSAGE)
+                {
                     let mid = ensure_agent_blocking(&tx, &name)?;
                     if mid != from_id && !recipient_ids.contains(&mid) {
                         recipient_ids.push(mid);
