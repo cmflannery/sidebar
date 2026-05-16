@@ -71,10 +71,26 @@ on the codebase.
 
 ## Good first issues
 
-- `sidebar agents` table view (name, last_seen, channel memberships).
-- `--json` output flag on `participants`, `inbox`, `history`.
-- A search command: `sidebar search "term"` over message bodies.
-- A purge / archive flow for inactive agents.
+Genuine gaps a contributor could pick up:
+
+- **`sidebar scheduled`** — list pending scheduled rows so users can see
+  what they queued. Paired with `sidebar cancel <id>` to cancel one.
+  Schema, op, store query, CLI, test.
+- **`sidebar tail --filter <pattern>`** — substring filter on the live
+  stream, useful when watching a busy `#general`.
+- **`sidebar inspect <message-id>`** — debug helper: print a message,
+  its deliveries, read state. SQL is straightforward.
+- **Shell completion** via `clap_complete`. One subcommand
+  (`sidebar completions <shell>`) writes the script.
+- **FTS5 index for `grep`** if message history grows past where the
+  current `LIKE` scan is acceptable. Premature now; real once a
+  long-running deployment surfaces it.
+- **Per-channel retention overrides** — high-traffic channels might
+  want shorter retention than the global 30 days.
+- **Multi-channel `sidebar join`** — `sidebar join #foo #bar #baz`.
+
+The earlier "good first issues" (agents table, `--json` everywhere,
+search, prune) have all been implemented; see CHANGELOG.
 
 ## What's out of scope
 
