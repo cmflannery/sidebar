@@ -259,9 +259,14 @@ impl Store {
         .await?
     }
 
-    /// Read unread messages for `agent_name`, marking them read in the same
-    /// transaction. Returns messages oldest-first.
-    pub async fn fetch_inbox(&self, agent_name: &str) -> Result<Vec<Message>> {
+    /// Read unread messages for `agent_name`, marking the returned subset
+    /// read in the same transaction. Returns oldest-first.
+    ///
+    /// When `mentions_only` is true, returns only messages where the agent
+    /// was explicitly addressed: DMs to them, or channel/broadcast messages
+    /// where their name is an `@`-mention in the body. The non-matching
+    /// unread messages remain unread for a later call.
+    pub async fn fetch_inbox(&self, agent_name: &str, mentions_only: bool) -> Result<Vec<Message>> {
         let conn = self.conn.clone();
         let agent_name = agent_name.to_string();
         tokio::task::spawn_blocking(move || -> Result<Vec<Message>> {
@@ -270,7 +275,7 @@ impl Store {
             let agent_id = ensure_agent_blocking(&tx, &agent_name)?;
             let now = Utc::now().to_rfc3339();
 
-            let messages = {
+            let candidates: Vec<Message> = {
                 let mut stmt = tx.prepare(
                     "SELECT m.id, fa.name AS from_name,
                             ta.name AS to_agent, tc.name AS to_channel, m.is_broadcast,
@@ -287,11 +292,41 @@ impl Store {
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
 
-            tx.execute(
+            let messages: Vec<Message> = if mentions_only {
+                candidates
+                    .into_iter()
+                    .filter(|m| {
+                        // DMs to me always count; channel/broadcast count only when
+                        // @<me> appears in the body via the same parser as send-time.
+                        matches!(&m.to, Recipient::Agent(n) if n == &agent_name)
+                            || extract_mentions(&m.body).iter().any(|n| n == &agent_name)
+                    })
+                    .collect()
+            } else {
+                candidates
+            };
+
+            // Mark only the returned subset as read, so a follow-up
+            // (unfiltered) inbox call still sees the rest.
+            if messages.is_empty() {
+                tx.commit()?;
+                return Ok(messages);
+            }
+
+            // Build a parameter list for the IN clause.
+            let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+            let placeholders: Vec<String> =
+                (1..=ids.len()).map(|i| format!("?{}", i + 2)).collect();
+            let sql = format!(
                 "UPDATE deliveries SET read_at = ?1
-                 WHERE agent_id = ?2 AND read_at IS NULL",
-                params![now, agent_id],
-            )?;
+                 WHERE agent_id = ?2 AND read_at IS NULL AND message_id IN ({})",
+                placeholders.join(",")
+            );
+            let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&now, &agent_id];
+            for id in &ids {
+                params_vec.push(id);
+            }
+            tx.execute(&sql, rusqlite::params_from_iter(params_vec))?;
             tx.commit()?;
             Ok(messages)
         })

@@ -93,6 +93,17 @@ DMs ignore mentions (the target already receives the message). The
 parser requires `@` to be at the start of the body or after whitespace,
 so email addresses like `user@example.com` don't false-positive.
 
+To pull only the messages where you were explicitly addressed (DM or
+@-mention), use the `--mentions-only` flag:
+
+```bash
+sidebar inbox --as alice --mentions-only
+# returns DMs to alice + channel/broadcast messages with @alice
+# leaves other unread messages for the next call
+```
+
+Same flag is available as `mcp__sidebar__inbox({mentions_only: true})`.
+
 ## Master controls
 
 ```bash

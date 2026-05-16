@@ -48,6 +48,11 @@ struct InboxArgs {
     /// addressed to the calling agent. Capped server-side at 5 minutes.
     #[serde(default)]
     wait_ms: Option<u64>,
+    /// When true, return only messages explicitly addressed to this agent:
+    /// DMs and channel/broadcast messages that @-mention them by name.
+    /// Other unread messages stay unread for a later non-filtered call.
+    #[serde(default)]
+    mentions_only: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -125,6 +130,7 @@ impl SidebarMcp {
     async fn inbox(&self, Parameters(args): Parameters<InboxArgs>) -> String {
         self.call(Op::Inbox {
             wait_ms: args.wait_ms,
+            mentions_only: args.mentions_only,
         })
         .await
     }

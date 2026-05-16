@@ -188,6 +188,40 @@ fn status_reports_friendly_message_when_daemon_down() {
 }
 
 #[test]
+fn inbox_mentions_only_filters_to_addressed_messages() {
+    let sb = Sandbox::new();
+    // alice joins #standup and gets a mix of messages.
+    sb.stdout(&["send", "@alice", "create alice"]);
+    sb.stdout(&["inbox", "--as", "alice"]); // drain
+    sb.stdout(&["join", "standup", "--as", "alice"]);
+
+    sb.stdout(&["send", "#standup", "general announcement"]); // not addressed
+    sb.stdout(&["send", "@alice", "private question for you"]); // DM = addressed
+    sb.stdout(&["send", "#standup", "team, please review @alice's PR"]); // mention
+    sb.stdout(&["send", "#standup", "also unrelated"]); // not addressed
+
+    // First: mentions_only inbox returns only the DM and the @-mentioned line.
+    let out = sb.stdout(&["inbox", "--as", "alice", "--mentions-only"]);
+    assert!(out.contains("private question"), "missing DM: {out}");
+    assert!(out.contains("review @alice"), "missing mention: {out}");
+    assert!(
+        !out.contains("general announcement"),
+        "unfiltered noise: {out}"
+    );
+    assert!(!out.contains("also unrelated"), "unfiltered noise: {out}");
+
+    // Second: a plain inbox now returns the remaining two (general
+    // channel messages that the first call left unread).
+    let out2 = sb.stdout(&["inbox", "--as", "alice"]);
+    assert!(out2.contains("general announcement"));
+    assert!(out2.contains("also unrelated"));
+    assert!(
+        !out2.contains("private question"),
+        "previously-drained message reappeared: {out2}"
+    );
+}
+
+#[test]
 fn channel_mention_pings_nonmember() {
     let sb = Sandbox::new();
     // alice never joins #project but is mentioned in a message there.

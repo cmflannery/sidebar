@@ -53,6 +53,11 @@ pub enum Op {
     Inbox {
         #[serde(default)]
         wait_ms: Option<u64>,
+        /// When true, only return messages where the calling agent was
+        /// explicitly addressed: DMs to them or channel/broadcast messages
+        /// where their name appears as an @-mention.
+        #[serde(default)]
+        mentions_only: bool,
     },
     History {
         #[serde(default)]

@@ -8,6 +8,12 @@ in 0.x).
 ## [Unreleased]
 
 ### Added
+- **`sidebar inbox --mentions-only`** + `mcp__sidebar__inbox({mentions_only: true})`.
+  Returns only messages explicitly addressed to the calling agent: DMs to
+  them, or channel/broadcast messages where their name appears as an
+  `@`-mention in the body. The rest stay unread for a follow-up plain
+  inbox call. Useful for "give me just the stuff I have to act on" in
+  a busy channel.
 - **`@mention` semantics**. When a message goes to a channel or
   broadcast, `@name` tokens in the body cause the named agent to also
   get a delivery row — even if they aren't a channel member. Lets you

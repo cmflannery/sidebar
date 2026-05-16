@@ -25,8 +25,9 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Inbox {
             as_name,
             wait_ms,
+            mentions_only,
             json,
-        } => inbox(as_name, wait_ms, json).await,
+        } => inbox(as_name, wait_ms, mentions_only, json).await,
         Command::Say { body } => say(body).await,
         Command::Participants { json } => participants(json).await,
         Command::Agents { all, json } => agents(all, json).await,
@@ -223,9 +224,19 @@ async fn send(to: String, body: String) -> Result<()> {
     Ok(())
 }
 
-async fn inbox(as_name: String, wait_ms: Option<u64>, json: bool) -> Result<()> {
+async fn inbox(
+    as_name: String,
+    wait_ms: Option<u64>,
+    mentions_only: bool,
+    json: bool,
+) -> Result<()> {
     let mut client = Client::connect_as(&as_name).await?;
-    let resp = client.request(Op::Inbox { wait_ms }).await?;
+    let resp = client
+        .request(Op::Inbox {
+            wait_ms,
+            mentions_only,
+        })
+        .await?;
     if !resp.ok {
         anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
     }

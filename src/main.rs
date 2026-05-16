@@ -69,6 +69,10 @@ pub enum Command {
         /// Long-poll up to this many milliseconds for new messages.
         #[arg(long)]
         wait_ms: Option<u64>,
+        /// Only return messages where the agent is explicitly addressed
+        /// (DMs to them or channel/broadcast messages with their @-mention).
+        #[arg(long)]
+        mentions_only: bool,
         #[arg(long)]
         json: bool,
     },

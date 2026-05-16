@@ -288,8 +288,9 @@ async fn fetch_inbox_with_long_poll(
     daemon: &Daemon,
     agent_name: &str,
     wait_ms: Option<u64>,
+    mentions_only: bool,
 ) -> Result<ResponseData> {
-    let messages = daemon.store.fetch_inbox(agent_name).await?;
+    let messages = daemon.store.fetch_inbox(agent_name, mentions_only).await?;
     let wait = wait_ms.unwrap_or(0).min(MAX_INBOX_WAIT_MS);
     if !messages.is_empty() || wait == 0 {
         return Ok(ResponseData::Messages { messages });
@@ -310,7 +311,7 @@ async fn fetch_inbox_with_long_poll(
             }
             evt = rx.recv() => match evt {
                 Ok(Event::Message { from, .. }) if from != agent_name => {
-                    let msgs = daemon.store.fetch_inbox(agent_name).await?;
+                    let msgs = daemon.store.fetch_inbox(agent_name, mentions_only).await?;
                     if !msgs.is_empty() {
                         return Ok(ResponseData::Messages { messages: msgs });
                     }
@@ -389,7 +390,10 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 Err(e) => Err(e),
             }
         }
-        Op::Inbox { wait_ms } => fetch_inbox_with_long_poll(daemon, agent_name, wait_ms).await,
+        Op::Inbox {
+            wait_ms,
+            mentions_only,
+        } => fetch_inbox_with_long_poll(daemon, agent_name, wait_ms, mentions_only).await,
         Op::History {
             channel,
             with,
