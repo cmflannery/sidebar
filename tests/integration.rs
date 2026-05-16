@@ -132,6 +132,24 @@ fn broadcast_creates_no_extra_agents() {
 }
 
 #[test]
+fn send_rejects_oversized_body() {
+    let sb = Sandbox::new();
+    let huge = "x".repeat(64 * 1024 + 1);
+    let out = sb.run(&["send", "@anybody", &huge]);
+    assert!(!out.status.success(), "oversized send should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("max is") && err.contains("65536"),
+        "expected size-cap error, got: {err}"
+    );
+
+    // A body right at the limit succeeds.
+    let ok = "x".repeat(64 * 1024);
+    let out = sb.run(&["send", "@anybody", &ok]);
+    assert!(out.status.success(), "at-limit send should succeed");
+}
+
+#[test]
 fn send_rejects_empty_or_whitespace_recipient() {
     let sb = Sandbox::new();
 
@@ -150,7 +168,10 @@ fn send_rejects_empty_or_whitespace_recipient() {
 
     // Confirm no ghost rows accumulated.
     let participants = sb.stdout(&["participants"]);
-    let count = participants.lines().filter(|l| !l.trim().is_empty()).count();
+    let count = participants
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
     assert_eq!(count, 1, "stray agents created:\n{participants}");
 
     let channels = sb.stdout(&["channels"]);

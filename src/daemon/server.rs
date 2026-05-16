@@ -287,6 +287,13 @@ async fn request_loop(
 /// clients; agents that genuinely want a long wait can re-call.
 const MAX_INBOX_WAIT_MS: u64 = 300_000; // 5 minutes
 
+/// Soft cap on message body size. Local-only sidebar has no malicious
+/// network attackers, but agents occasionally try to forward 50KB+ of
+/// LLM output as a single message — bounded here so the daemon can't
+/// be DoS'd by a runaway producer, and so the inbox response stays
+/// human-grokkable.
+const MAX_BODY_BYTES: usize = 64 * 1024;
+
 async fn fetch_inbox_with_long_poll(
     daemon: &Daemon,
     agent_name: &str,
@@ -389,6 +396,17 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                     data: None,
                 };
             }
+            if body.len() > MAX_BODY_BYTES {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!(
+                        "body is {} bytes; max is {MAX_BODY_BYTES}",
+                        body.len()
+                    )),
+                    data: None,
+                };
+            }
             match daemon
                 .store
                 .send_message(agent_name, &recipient, &body, intent, reply_to)
@@ -435,6 +453,17 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                     id,
                     ok: false,
                     error: Some(format!("invalid recipient `{to}`: {e}")),
+                    data: None,
+                };
+            }
+            if body.len() > MAX_BODY_BYTES {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!(
+                        "body is {} bytes; max is {MAX_BODY_BYTES}",
+                        body.len()
+                    )),
                     data: None,
                 };
             }

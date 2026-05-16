@@ -7,6 +7,18 @@ in 0.x).
 
 ## [Unreleased]
 
+### Added
+- **`.github/workflows/release.yml`** — triggers on `v*.*.*` tag push.
+  Builds release binaries for `aarch64-apple-darwin`,
+  `x86_64-apple-darwin`, and `x86_64-unknown-linux-gnu`, tarballs each
+  with its `sha256` sum, and attaches them to the GitHub Release.
+
+### Changed
+- **Soft cap on message body size**: 64 KB. Larger sends are rejected
+  with `body is N bytes; max is 65536`. Applies to both `Op::Send` and
+  `Op::Schedule`. Bounds the daemon's memory footprint and keeps inbox
+  output human-grokkable.
+
 ### Fixed
 - **Empty/whitespace recipients no longer create ghost agent/channel
   rows.** Before this iteration, `sidebar send "" "x"`, `sidebar send

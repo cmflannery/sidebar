@@ -152,10 +152,14 @@ Reproduce: `./examples/bench.sh` (writes nothing outside a tmp dir).
 ## Quick start
 
 ```bash
-# build
+# install
+cargo install --path .             # from a clone
+# — or — grab a pre-built binary from the Releases page on GitHub
+#        (built for macos-arm64, macos-x86_64, linux-x86_64 on each tag)
+
+# or build manually:
 cargo build --release
 sudo ln -sf "$(pwd)/target/release/sidebar" /usr/local/bin/sidebar
-# or: cargo install --path .
 
 # terminal 1 — daemon
 sidebar serve

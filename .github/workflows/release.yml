@@ -1,0 +1,74 @@
+name: release
+
+# Triggered when you push a semver tag, e.g. `git tag v0.3.0 && git push --tags`.
+# Builds release binaries for macOS (arm64 + x86_64) and Linux (x86_64),
+# tarballs them, and attaches them to the GitHub Release for the tag.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: build
+        run: cargo build --release --target ${{ matrix.target }} --locked
+
+      - name: package
+        id: pkg
+        shell: bash
+        run: |
+          tag="${GITHUB_REF##*/}"   # e.g. "v0.3.0"
+          archive="sidebar-${tag}-${{ matrix.target }}.tar.gz"
+          bindir="target/${{ matrix.target }}/release"
+          # macOS `strip` is permissive; Linux strip needs the binary path.
+          strip "${bindir}/sidebar" || true
+          tar -C "${bindir}" -czf "${archive}" sidebar
+          # Compute sha256 for the asset.
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "${archive}" > "${archive}.sha256"
+          else
+            sha256sum "${archive}" > "${archive}.sha256"
+          fi
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+          echo "checksum=${archive}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.pkg.outputs.archive }}
+            ${{ steps.pkg.outputs.checksum }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
