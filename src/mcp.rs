@@ -5,10 +5,18 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use rmcp::ServiceExt;
+use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{
+    GetPromptRequestParams, GetPromptResult, ListPromptsResult, PaginatedRequestParams,
+    PromptMessage, PromptMessageRole,
+};
+use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
-use rmcp::{schemars, tool, tool_router};
+use rmcp::{
+    RoleServer, ServerHandler, ServiceExt, prompt, prompt_handler, prompt_router, schemars, tool,
+    tool_handler, tool_router,
+};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
@@ -23,6 +31,7 @@ struct SidebarMcp {
     /// after a failure". Each tool call re-establishes if needed; this lets
     /// the stub survive a daemon restart instead of dying on stdin EOF.
     client: Arc<Mutex<Option<Client>>>,
+    prompt_router: PromptRouter<Self>,
 }
 
 // ---- tool arg types ----
@@ -111,7 +120,7 @@ struct ScheduleArgs {
     at: Option<String>,
 }
 
-#[tool_router(server_handler)]
+#[tool_router]
 impl SidebarMcp {
     #[tool(description = "Returns the calling agent's registered name in sidebar.")]
     async fn whoami(&self) -> String {
@@ -261,6 +270,98 @@ impl SidebarMcp {
     }
 }
 
+// ---- prompts ----
+//
+// Exposed via MCP so `claude mcp add sidebar -- sidebar mcp` makes
+// `/mcp__sidebar__sidebar-start` available with no extra file copying.
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SidebarStartArgs {
+    /// Optional polling interval (e.g. `30s`, `5m`, `1h`). When set, the
+    /// agent arms a recurring ScheduleWakeup that re-runs this prompt.
+    /// Omit for per-turn mode.
+    #[serde(default)]
+    interval: Option<String>,
+}
+
+#[prompt_router(router = "prompt_router")]
+impl SidebarMcp {
+    #[prompt(
+        name = "sidebar-start",
+        description = "Register with sidebar. Optional `interval` (e.g. `5m`) arms a recurring inbox check via ScheduleWakeup."
+    )]
+    async fn sidebar_start(
+        &self,
+        Parameters(args): Parameters<SidebarStartArgs>,
+    ) -> Vec<PromptMessage> {
+        let body = match args.interval.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            None => SIDEBAR_START_PER_TURN.to_string(),
+            Some(raw) => match parse_interval(raw) {
+                Some(secs) => render_sidebar_start_scheduled(raw, secs),
+                None => format!(
+                    "The interval `{raw}` isn't a recognized format. Use values like `30s`, `5m`, `1h` (max 1 hour). Ask the user to re-run with a valid interval; do not call any tools or `ScheduleWakeup`."
+                ),
+            },
+        };
+        vec![PromptMessage::new_text(PromptMessageRole::User, body)]
+    }
+}
+
+const SIDEBAR_START_PER_TURN: &str = "You are starting a sidebar session in this Claude Code window.\n\
+\n\
+Do these in one short message:\n\
+1. Call `mcp__sidebar__whoami` to confirm your name.\n\
+2. Call `mcp__sidebar__participants` to see who else is around.\n\
+3. Tell the user: who you are, who else is here, and that you're in per-turn mode (no scheduled polling).\n\
+\n\
+For every turn from now on, before doing anything else, call `mcp__sidebar__inbox` (no `wait_ms`). For messages addressed to you (DMs, or `@<your-name>` in a channel/broadcast), respond concisely. If empty, continue with whatever the user asked.";
+
+fn render_sidebar_start_scheduled(human: &str, seconds: u64) -> String {
+    format!(
+        "You are running a sidebar session with a scheduled inbox poll every {human}.\n\
+\n\
+If this is the first call (no prior `whoami` yet), do these in one short message:\n\
+1. Call `mcp__sidebar__whoami` to confirm your name.\n\
+2. Call `mcp__sidebar__participants` to see who else is around.\n\
+3. Tell the user you'll poll every {human}.\n\
+\n\
+On every fire (including this one):\n\
+1. Call `mcp__sidebar__inbox` (no `wait_ms`).\n\
+2. For messages addressed to you (DMs or `@<your-name>` in channel/broadcast), respond concisely. Stay quiet on other channel chatter unless it changes something the user cares about.\n\
+3. Call `ScheduleWakeup` with:\n\
+   - `delaySeconds`: {seconds}\n\
+   - `prompt`: `/mcp__sidebar__sidebar-start {human}`\n\
+   - `reason`: `sidebar inbox poll`\n\
+\n\
+Stopping: if the user has just told you to \"stop checking sidebar\", \"stop the sidebar loop\", or \"pause sidebar polling\", do not call `ScheduleWakeup` on this fire. The loop dies because nothing re-armed it.\n\
+\n\
+If `mcp__sidebar__inbox` returns `{{\"ok\": false, ...}}`, mention the error briefly and still re-arm — the daemon may have restarted and the next fire will likely succeed."
+    )
+}
+
+/// Parse strings like `30s`, `5m`, `1h` into seconds. Caps at 1 hour.
+fn parse_interval(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (num_str, unit) = s.split_at(s.len().checked_sub(1)?);
+    let num: u64 = num_str.parse().ok()?;
+    let secs = match unit {
+        "s" => num,
+        "m" => num.checked_mul(60)?,
+        "h" => num.checked_mul(3600)?,
+        _ => return None,
+    };
+    if secs == 0 || secs > 3600 {
+        return None;
+    }
+    Some(secs)
+}
+
+// ---- ServerHandler ----
+
+#[tool_handler]
+#[prompt_handler(router = self.prompt_router)]
+impl ServerHandler for SidebarMcp {}
+
 impl SidebarMcp {
     /// Send an Op to the daemon and return a JSON-encoded string the caller
     /// can parse. On any error (daemon down, serialization, etc.) returns a
@@ -395,6 +496,7 @@ pub async fn serve(requested_name: String) -> Result<()> {
     let server = SidebarMcp {
         agent_name,
         client: Arc::new(Mutex::new(client)),
+        prompt_router: SidebarMcp::prompt_router(),
     };
     let service = server.serve(stdio()).await?;
     service.waiting().await?;

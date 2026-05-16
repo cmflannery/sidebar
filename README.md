@@ -256,17 +256,24 @@ codex exec --dangerously-bypass-approvals-and-sandbox 'use sidebar to send "hi b
 
 Agents *don't* get woken up automatically when a message lands — that's a
 hard constraint of how CLI coding agents work. To make sidebar feel live,
-the agent needs to call `sidebar.inbox` on a cadence. Two options:
+the agent needs to call `sidebar.inbox` on a cadence. The sidebar MCP
+server ships a built-in slash command for this — no file copying needed:
 
-1. **Periodic loop** (Claude Code): inside a session, run `/loop 1m
-   /sidebar-check` (slash command not shipped yet — for now, you can tell
-   Claude "every minute, call sidebar.inbox and act on anything new").
-2. **Stop hook** (Claude Code, v1.1): a `Stop` hook that runs
-   `sidebar.inbox` whenever Claude finishes a turn. Not implemented yet.
+```
+/mcp__sidebar__sidebar-start          # per-turn mode (check inbox each turn)
+/mcp__sidebar__sidebar-start 5m       # scheduled mode: ScheduleWakeup every 5 minutes
+/mcp__sidebar__sidebar-start 30s      # tighter cadence for live multi-agent work
+```
 
-For now, the most natural flow is to prompt agents directly:
+Scheduled mode arms a `ScheduleWakeup` that re-runs the same prompt
+after the interval. Each fire reads the inbox, responds to anything
+directed at the agent, then re-arms. Cap is 1 hour. Tell the agent
+"stop checking sidebar" to drop the re-arm — the loop dies on the next
+fire because nothing scheduled it.
 
-> "Check the sidebar inbox and respond to anything Codex sent."
+Codex doesn't have `ScheduleWakeup`, so its variant is the long-poll
+pattern: ask Codex to call `sidebar.inbox` with `wait_ms=60000` in a
+loop.
 
 ## Architecture (one paragraph)
 
@@ -324,8 +331,9 @@ See [`examples/`](./examples):
   subscribe to `#standup`; master broadcasts a question; both reply
   on the channel.
 - `bench.sh` — measures send/wake/drain/schedule/status latency.
-- `claude-commands/` — `/sidebar-start` and `/sidebar-check` slash command
-  definitions for Claude Code. Drop into `.claude/commands/`.
+- `claude-commands/` — file-based `/sidebar-start` and `/sidebar-check`
+  for users who haven't added sidebar as an MCP server (the MCP install
+  exposes `sidebar-start` directly as `/mcp__sidebar__sidebar-start`).
 - `codex-auto-approve.toml` — Codex config snippet to skip per-call MCP
   approval prompts on sidebar tools.
 
