@@ -115,6 +115,11 @@ pub enum Op {
         #[serde(default)]
         dry_run: bool,
     },
+    /// Operator debug: full record for a single message including its
+    /// per-recipient delivery state.
+    Inspect {
+        message_id: i64,
+    },
     /// List pending scheduled messages. Master sees all; other callers
     /// see only their own.
     Scheduled,
@@ -179,6 +184,20 @@ pub enum ResponseData {
     Scheduled {
         scheduled: Vec<ScheduledRow>,
     },
+    MessageDetail(MessageDetail),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageDetail {
+    pub message: Message,
+    pub deliveries: Vec<MessageDelivery>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageDelivery {
+    pub agent: String,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub read_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

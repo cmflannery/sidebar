@@ -80,6 +80,11 @@ in 0.x).
   `Recipient::parse` also now trims leading/trailing whitespace.
 
 ### Added
+- **`sidebar inspect <message-id>`** — operator debug helper. Prints the
+  message header, body, and a per-recipient delivery table showing
+  delivered_at / read_at for each agent. Useful for "did codex see my
+  reply?" without raw SQL. CLI-only (no MCP) — agents shouldn't be
+  able to surveil each other's read state.
 - **`sidebar tail --filter <pattern>`** — print only events whose
   default-format line contains the pattern (case-insensitive). Useful
   for `--filter @alice` to watch only messages mentioning alice, or

@@ -41,6 +41,7 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Grep { query, limit, json } => grep(query, limit, json).await,
         Command::Join { channel, as_name } => join(channel, as_name).await,
         Command::Leave { channel, as_name } => leave(channel, as_name).await,
+        Command::Inspect { message_id, json } => inspect(message_id, json).await,
         Command::Scheduled { as_name, json } => scheduled(as_name, json).await,
         Command::Cancel {
             scheduled_id,
@@ -458,6 +459,75 @@ async fn history(
         anyhow::bail!("unexpected response: {resp:?}");
     };
     print_messages(&messages, json)
+}
+
+async fn inspect(message_id: i64, json: bool) -> Result<()> {
+    let mut client = Client::connect_as("master").await?;
+    let resp = client.request(Op::Inspect { message_id }).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    let Some(ResponseData::MessageDetail(detail)) = resp.data else {
+        anyhow::bail!("unexpected response: {resp:?}");
+    };
+    if json {
+        println!("{}", serde_json::to_string(&detail)?);
+        return Ok(());
+    }
+    let m = &detail.message;
+    let to_label = match &m.to {
+        Recipient::Agent(n) => format!("@{n}"),
+        Recipient::Channel(n) => format!("#{n}"),
+        Recipient::Broadcast => "*".to_string(),
+    };
+    let ts = m
+        .created_at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S");
+    println!("message {} — {} → {to_label} at {ts}", m.id, m.from);
+    if let Some(intent) = &m.intent {
+        println!("intent: {intent:?}");
+    }
+    if let Some(reply) = m.reply_to {
+        println!("reply_to: {reply}");
+    }
+    println!("body:");
+    for line in m.body.lines() {
+        println!("  {line}");
+    }
+    println!();
+    if detail.deliveries.is_empty() {
+        println!("(no deliveries — message went nowhere)");
+    } else {
+        let name_w = detail
+            .deliveries
+            .iter()
+            .map(|d| d.agent.len())
+            .max()
+            .unwrap_or(5);
+        println!("deliveries:");
+        for d in &detail.deliveries {
+            let delivered = d.delivered_at.map_or_else(
+                || "(undelivered)".to_string(),
+                |t| {
+                    t.with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string()
+                },
+            );
+            let read = d.read_at.map_or_else(
+                || "unread".to_string(),
+                |t| {
+                    format!(
+                        "read {}",
+                        t.with_timezone(&chrono::Local).format("%H:%M:%S")
+                    )
+                },
+            );
+            println!("  {:<name_w$}  delivered {delivered}  {read}", d.agent);
+        }
+    }
+    Ok(())
 }
 
 async fn scheduled(as_name: String, json: bool) -> Result<()> {

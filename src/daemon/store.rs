@@ -616,6 +616,62 @@ impl Store {
         .await?
     }
 
+    /// Fetch a message by id along with its per-recipient delivery state.
+    /// Returns Ok(None) if no such message exists.
+    pub async fn inspect_message(
+        &self,
+        message_id: i64,
+    ) -> Result<Option<crate::proto::MessageDetail>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<Option<crate::proto::MessageDetail>> {
+            let conn = conn.blocking_lock();
+
+            let msg: Option<Message> = conn
+                .query_row(
+                    "SELECT m.id, fa.name AS from_name,
+                            ta.name AS to_agent, tc.name AS to_channel, m.is_broadcast,
+                            m.body, m.intent, m.reply_to, m.created_at
+                     FROM messages m
+                     JOIN agents fa ON fa.id = m.from_agent
+                     LEFT JOIN agents ta ON ta.id = m.to_agent
+                     LEFT JOIN channels tc ON tc.id = m.to_channel
+                     WHERE m.id = ?1",
+                    params![message_id],
+                    row_to_message,
+                )
+                .optional()?;
+
+            let Some(message) = msg else {
+                return Ok(None);
+            };
+
+            let mut stmt = conn.prepare(
+                "SELECT a.name, d.delivered_at, d.read_at
+                 FROM deliveries d
+                 JOIN agents a ON a.id = d.agent_id
+                 WHERE d.message_id = ?1
+                 ORDER BY a.name",
+            )?;
+            let deliveries = stmt
+                .query_map(params![message_id], |r| {
+                    let delivered_raw: Option<String> = r.get(1)?;
+                    let read_raw: Option<String> = r.get(2)?;
+                    Ok(crate::proto::MessageDelivery {
+                        agent: r.get(0)?,
+                        delivered_at: delivered_raw.as_deref().map(parse_ts),
+                        read_at: read_raw.as_deref().map(parse_ts),
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            Ok(Some(crate::proto::MessageDetail {
+                message,
+                deliveries,
+            }))
+        })
+        .await?
+    }
+
     /// List pending scheduled rows. If `only_for_agent` is set, returns
     /// only rows where the payload's `from` matches that name. Ordered
     /// by deliver_at ascending (soonest first).

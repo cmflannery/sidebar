@@ -148,6 +148,14 @@ pub enum Command {
         as_name: String,
     },
 
+    /// Operator debug: print a single message with its per-recipient
+    /// delivery state (delivered/read timestamps per agent).
+    Inspect {
+        message_id: i64,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// List pending scheduled messages (master sees all; --as <name>
     /// scopes to that agent's own).
     Scheduled {

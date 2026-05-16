@@ -284,6 +284,45 @@ fn grep_rejects_excessive_query_length_and_limit() {
 }
 
 #[test]
+fn inspect_shows_per_recipient_delivery_state() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@alice", "create alice"]);
+    sb.stdout(&["send", "@bob", "create bob"]);
+    sb.stdout(&["join", "deploys", "--as", "alice"]);
+    sb.stdout(&["join", "deploys", "--as", "bob"]);
+
+    // Send a channel message — both alice and bob are members, both get
+    // delivery rows. Alice reads it; bob doesn't.
+    let send_out = sb.stdout(&["send", "#deploys", "shipping v1"]);
+    // The message id isn't returned by `sidebar send`; find it via grep.
+    let _ = send_out;
+    // Drain alice's inbox to mark her delivery as read.
+    sb.stdout(&["inbox", "--as", "alice"]);
+
+    // Look up the channel message id via history --json.
+    let json = sb.stdout(&["history", "--channel", "deploys", "--json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let msg_id = parsed[0]["id"].as_i64().expect("id field");
+
+    let out = sb.stdout(&["inspect", &msg_id.to_string()]);
+    assert!(
+        out.contains(&format!("message {msg_id}")),
+        "header missing: {out}"
+    );
+    assert!(out.contains("shipping v1"), "body missing: {out}");
+    assert!(out.contains("alice"), "alice delivery missing: {out}");
+    assert!(out.contains("bob"), "bob delivery missing: {out}");
+    assert!(out.contains("read"), "alice's read marker missing: {out}");
+    assert!(out.contains("unread"), "bob's unread marker missing: {out}");
+
+    // Bad id errors clearly.
+    let bad = sb.run(&["inspect", "999"]);
+    assert!(!bad.status.success());
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(err.contains("no message with id 999"), "wrong error: {err}");
+}
+
+#[test]
 fn tail_filter_only_prints_matching_lines() {
     let sb = Sandbox::new();
 

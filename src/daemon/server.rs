@@ -577,6 +577,11 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|messages| ResponseData::Messages { messages })
         }
+        Op::Inspect { message_id } => match daemon.store.inspect_message(message_id).await {
+            Ok(Some(detail)) => Ok(ResponseData::MessageDetail(detail)),
+            Ok(None) => Err(anyhow::anyhow!("no message with id {message_id}")),
+            Err(e) => Err(e),
+        },
         Op::Scheduled => {
             let only = if agent_name == "master" {
                 None

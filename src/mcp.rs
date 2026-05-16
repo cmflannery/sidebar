@@ -311,6 +311,14 @@ fn format_response_data(data: Option<&ResponseData>) -> serde_json::Value {
         Some(ResponseData::Scheduled { scheduled }) => {
             serde_json::json!({ "ok": true, "scheduled": scheduled })
         }
+        Some(ResponseData::MessageDetail(_)) => {
+            // Not exposed as an MCP tool; agents shouldn't surveil each
+            // other's read state. This arm exists for exhaustiveness only.
+            serde_json::json!({
+                "ok": false,
+                "error": "inspect is not exposed to agents",
+            })
+        }
         None => serde_json::json!({ "ok": true }),
     }
 }
