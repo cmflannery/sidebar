@@ -933,7 +933,7 @@ fn inbox_wait_returns_at_timeout_when_empty() {
         "returned too early: {elapsed:?}"
     );
     assert!(
-        elapsed < Duration::from_millis(2000),
+        elapsed < Duration::from_secs(2),
         "returned far too late: {elapsed:?}"
     );
 }
@@ -966,7 +966,7 @@ fn inbox_wait_wakes_when_message_arrives() {
     assert!(stdout.contains("wake up bob"), "missing body: {stdout}");
     // Must wake well before the 5s timeout.
     assert!(
-        elapsed < Duration::from_millis(1000),
+        elapsed < Duration::from_secs(1),
         "wake too slow ({elapsed:?}); long-poll not actually triggering"
     );
 }
@@ -987,7 +987,7 @@ fn schedule_in_delivers_after_the_delay() {
         "delivered too early ({elapsed:?})"
     );
     assert!(
-        elapsed < Duration::from_millis(3000),
+        elapsed < Duration::from_secs(3),
         "delivered too late ({elapsed:?})"
     );
 }
