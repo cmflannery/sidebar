@@ -106,6 +106,16 @@ pub enum Op {
         #[serde(default = "default_search_limit")]
         limit: usize,
     },
+    /// Delete agents inactive for `inactive_days` who have no messages
+    /// either from or to them. Master and active agents are never touched.
+    Prune {
+        #[serde(default = "default_prune_days")]
+        inactive_days: i64,
+    },
+}
+
+fn default_prune_days() -> i64 {
+    30
 }
 
 fn default_search_limit() -> usize {

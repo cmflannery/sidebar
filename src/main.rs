@@ -142,6 +142,13 @@ pub enum Command {
         as_name: String,
     },
 
+    /// Drop agent rows inactive for N days that have no messages either
+    /// from or to them. Master is never pruned.
+    Prune {
+        #[arg(long, default_value_t = 30)]
+        inactive_days: i64,
+    },
+
     /// Hold new message delivery.
     Pause,
 

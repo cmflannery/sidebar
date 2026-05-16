@@ -608,6 +608,39 @@ impl Store {
         .await?
     }
 
+    /// Delete agents that haven't been seen in `inactive_days` AND have
+    /// zero messages either from or to them. Master and the seed agents
+    /// are never touched. Returns the number of agent rows removed.
+    ///
+    /// We only prune "ghost" rows (typo'd @-mentions, registrations that
+    /// did nothing) because the messages.from_agent / to_agent FKs are
+    /// `RESTRICT` — deleting an agent with messages would either fail
+    /// or require destroying their history, neither of which is what a
+    /// user typically wants.
+    pub async fn prune_inactive_agents(&self, inactive_days: i64) -> Result<usize> {
+        let conn = self.conn.clone();
+        let cutoff = Utc::now() - chrono::Duration::days(inactive_days);
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let mut conn = conn.blocking_lock();
+            let tx = conn.transaction()?;
+            let cutoff_str = cutoff.to_rfc3339();
+            // `master` is the seeded operator account; never prune it.
+            let dropped = tx.execute(
+                "DELETE FROM agents
+                 WHERE name != 'master'
+                   AND last_seen < ?1
+                   AND id NOT IN (SELECT DISTINCT from_agent FROM messages)
+                   AND id NOT IN (
+                     SELECT to_agent FROM messages WHERE to_agent IS NOT NULL
+                   )",
+                params![cutoff_str],
+            )?;
+            tx.commit()?;
+            Ok(dropped)
+        })
+        .await?
+    }
+
     /// Subscribe `agent_name` to a channel. Creates the channel if needed.
     pub async fn join_channel(&self, agent_name: &str, channel: &str) -> Result<()> {
         let conn = self.conn.clone();

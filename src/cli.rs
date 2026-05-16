@@ -41,6 +41,7 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Grep { query, limit, json } => grep(query, limit, json).await,
         Command::Join { channel, as_name } => join(channel, as_name).await,
         Command::Leave { channel, as_name } => leave(channel, as_name).await,
+        Command::Prune { inactive_days } => prune(inactive_days).await,
         Command::Pause => pause().await,
         Command::Resume => resume().await,
         Command::Status { json } => status(json).await,
@@ -437,6 +438,18 @@ async fn history(
         anyhow::bail!("unexpected response: {resp:?}");
     };
     print_messages(&messages, json)
+}
+
+async fn prune(inactive_days: i64) -> Result<()> {
+    let mut client = Client::connect_as("master").await?;
+    let resp = client.request(Op::Prune { inactive_days }).await?;
+    if !resp.ok {
+        anyhow::bail!("daemon error: {}", resp.error.unwrap_or_default());
+    }
+    if let Some(ResponseData::SendOk { message_id: count }) = resp.data {
+        println!("pruned {count} inactive agent(s)");
+    }
+    Ok(())
 }
 
 async fn pause() -> Result<()> {

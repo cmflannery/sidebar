@@ -430,6 +430,47 @@ fn inbox_mentions_only_filters_to_addressed_messages() {
 }
 
 #[test]
+fn prune_removes_ghost_agents_only() {
+    let sb = Sandbox::new();
+
+    // Three agents:
+    //   - ghost: created via mention typo, never sent or received
+    //   - chatty: created and has sent a message (must survive prune)
+    //   - master: seeded, must never be pruned
+    sb.stdout(&["send", "#general", "hello @ghost"]); // creates ghost
+    sb.stdout(&["send", "@chatty", "create chatty"]); // creates chatty with a delivery
+    // chatty also sends something so they have a from_agent row.
+    sb.stdout(&["send", "@chatty", "another message for chatty"]);
+
+    // Backdate every agent's last_seen well past 1 day ago so the cutoff bites.
+    let db = sb.home.join("sidebar.db");
+    let _ = Command::new("sqlite3")
+        .arg(&db)
+        .arg("UPDATE agents SET last_seen='2020-01-01T00:00:00Z'")
+        .output()
+        .expect("sqlite3 backdate");
+
+    // Prune with 1-day cutoff. Should drop ghost only — chatty has
+    // delivery rows pointing at them (to_agent), master is exempt.
+    let out = sb.stdout(&["prune", "--inactive-days", "1"]);
+    assert!(out.contains("pruned 1"), "expected 1 pruned, got: {out}");
+
+    let participants = sb.stdout(&["participants"]);
+    assert!(
+        participants.contains("master"),
+        "master got pruned: {participants}"
+    );
+    assert!(
+        participants.contains("chatty"),
+        "chatty got pruned: {participants}"
+    );
+    assert!(
+        !participants.contains("ghost"),
+        "ghost survived prune: {participants}"
+    );
+}
+
+#[test]
 fn channels_details_shows_member_count_and_activity() {
     let sb = Sandbox::new();
     sb.stdout(&["send", "@alice", "create alice"]);
