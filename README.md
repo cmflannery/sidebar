@@ -67,19 +67,26 @@ From MCP: `mcp__sidebar__schedule({to, body, delay_seconds | at})`. The
 daemon's scheduler ticks every 1 second, so delivery happens within ~1 s
 of the requested time. Scheduled rows survive daemon restarts.
 
-## Measured perf (local, debug build)
+## Measured perf (local, release build)
 
-| Operation                              | Time    |
-|----------------------------------------|---------|
-| `inbox --wait-ms 2000`, message arrives | ~34 ms  |
-| `inbox --wait-ms 300`, empty            | ~330 ms |
-| `send` (process spawn + connect)        | ~5 ms   |
-| Drain 50 unread messages via `inbox`    | ~31 ms  |
-| Scheduled delivery (1s scheduler tick)  | up to 1 s after `deliver_at` |
+From `./examples/bench.sh` on an M-series MacBook:
 
-The 5 ms/send is dominated by CLI process startup. Daemon-side work
-(transaction + broker fan-out) is sub-millisecond. Agents that hold an
+| Operation                                | Time     |
+|------------------------------------------|----------|
+| `inbox --wait-ms 5000`, message arrives  | **35 ms** |
+| `send` cold (process spawn + connect)    | ~6 ms    |
+| Drain 20 unread messages via `inbox`     | 31 ms total |
+| Schedule `--in 0` → delivered to inbox   | ~530 ms  |
+| `status` round-trip                      | ~33 ms   |
+
+Cold-send time is dominated by CLI process startup. Daemon-side work
+(transaction + broker fan-out) is sub-millisecond — agents that hold an
 MCP-stub connection don't pay the spawn cost per call.
+
+Scheduled delivery is bounded below by the 1 s scheduler tick. Long-poll
+inbox is the path to use when you want sub-100 ms responsiveness.
+
+Reproduce: `./examples/bench.sh` (writes nothing outside a tmp dir).
 
 ## Quick start
 
@@ -211,6 +218,7 @@ See [`examples/`](./examples):
 - `quickstart.sh` — runs a daemon in a sandbox, fires messages, shows tail.
 - `two-agents.sh` — drives two `sidebar mcp` stubs through JSON-RPC to
   simulate two real agents (alice + bob) talking through the daemon.
+- `bench.sh` — measures send/wake/drain/schedule/status latency.
 - `claude-commands/` — `/sidebar-start` and `/sidebar-check` slash command
   definitions for Claude Code. Drop into `.claude/commands/`.
 - `codex-auto-approve.toml` — Codex config snippet to skip per-call MCP

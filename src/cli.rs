@@ -115,16 +115,21 @@ async fn tail(json: bool) -> Result<()> {
                 body,
                 message_id: _,
             }) => {
+                let now = chrono::Local::now().format("%H:%M:%S");
                 let to_label = match to {
                     Recipient::Agent(n) => format!("@{n}"),
                     Recipient::Channel(n) => format!("#{n}"),
                     Recipient::Broadcast => "*".to_string(),
                 };
-                println!("{from} → {to_label}: {body}");
+                println!("[{now}] {from} → {to_label}: {body}");
             }
-            Ok(crate::proto::Event::Paused) => println!("(paused)"),
-            Ok(crate::proto::Event::Resumed) => println!("(resumed)"),
-            // Quietly ignore non-event frames (e.g. the Subscribe ack).
+            Ok(crate::proto::Event::Paused) => {
+                println!("[{}] (paused)", chrono::Local::now().format("%H:%M:%S"));
+            }
+            Ok(crate::proto::Event::Resumed) => {
+                println!("[{}] (resumed)", chrono::Local::now().format("%H:%M:%S"));
+            }
+            // Quietly ignore non-event frames (HelloAck, Subscribe ack).
             Err(_) => {}
         }
     }
@@ -161,13 +166,11 @@ async fn inbox(as_name: String, wait_ms: Option<u64>) -> Result<()> {
                     Recipient::Channel(n) => format!("#{n}"),
                     Recipient::Broadcast => "*".to_string(),
                 };
-                println!(
-                    "[{}] {} → {}: {}",
-                    m.created_at.format("%H:%M:%S"),
-                    m.from,
-                    to_label,
-                    m.body
-                );
+                let ts = m
+                    .created_at
+                    .with_timezone(&chrono::Local)
+                    .format("%H:%M:%S");
+                println!("[{ts}] {} → {to_label}: {}", m.from, m.body);
             }
             Ok(())
         }
@@ -247,13 +250,11 @@ async fn history(channel: Option<String>, with: Option<String>, limit: usize) ->
                     Recipient::Channel(n) => format!("#{n}"),
                     Recipient::Broadcast => "*".to_string(),
                 };
-                println!(
-                    "[{}] {} → {}: {}",
-                    m.created_at.format("%H:%M:%S"),
-                    m.from,
-                    to_label,
-                    m.body
-                );
+                let ts = m
+                    .created_at
+                    .with_timezone(&chrono::Local)
+                    .format("%H:%M:%S");
+                println!("[{ts}] {} → {to_label}: {}", m.from, m.body);
             }
             Ok(())
         }

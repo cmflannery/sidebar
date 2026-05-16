@@ -13,6 +13,15 @@ in 0.x).
   `install/README.md` with copy-paste setup steps.
 - CI smoke step: `cargo install --path . --root /tmp/...` then exercises
   the installed binary's `--help` to confirm subcommands surface.
+- `examples/bench.sh` — reproducible local perf numbers (the same ones
+  in README's perf table).
+
+### Changed
+- `sidebar tail` now prefixes each line with `[HH:MM:SS]` to match
+  `history` / `inbox` output.
+- `sidebar history` and `sidebar inbox` now print timestamps in local
+  time (previously UTC), which is more useful for humans glancing at
+  output.
 
 ## [0.3.0] – 2026-05-16
 
