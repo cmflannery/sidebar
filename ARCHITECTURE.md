@@ -86,40 +86,72 @@ Crate: `rmcp` (official Rust MCP SDK). Verify on `cargo add` that the API for bo
 
 ## 5. Wire protocol — daemon ↔ stubs/CLI
 
-Length-prefixed newline-delimited JSON (NDJSON) over the unix socket. Each line is one request or response.
+Newline-delimited JSON (NDJSON) over the unix socket. Each line is one
+frame. The Rust types are defined in [`src/proto.rs`](./src/proto.rs)
+and are the single source of truth; the catalog here is illustrative.
 
-**Connection types** declared in a hello frame:
+The protocol has four kinds of frames:
+
+**1. Hello (client → daemon, exactly once at connect)**
 
 ```json
-{"hello": "mcp",   "agent": "claude-code", "version": "0.1.0"}
+{"hello": "mcp",   "agent": "claude-code", "version": "0.3.0"}
 {"hello": "cli",   "as": "master"}
 ```
 
-**Requests** are tagged with a client-chosen `id` for correlation:
+**2. HelloAck (daemon → client, exactly once immediately after Hello)**
+
+```json
+{"agent": "claude-code"}
+{"agent": "claude-code-2"}   // when the requested name collides with an active session
+```
+
+The assigned name is what every later op uses as the identity. MCP stubs
+expose it via the `whoami` tool.
+
+**3. Request (client → daemon)** — tagged with a client-chosen `id`:
 
 ```json
 {"id": 17, "op": "send", "to": "@codex", "body": "review this", "reply_to": null}
-{"id": 18, "op": "inbox", "wait_ms": 30000}
+{"id": 18, "op": "inbox", "wait_ms": 30000, "mentions_only": false}
 {"id": 19, "op": "schedule", "to": "@claude-code", "body": "check build", "at": "2026-05-15T20:00:00Z"}
-{"id": 20, "op": "history", "channel": "#general", "limit": 50}
-{"id": 21, "op": "participants"}
+{"id": 20, "op": "history", "channel": "general", "limit": 50}
+{"id": 21, "op": "search", "query": "deploy", "limit": 50}
+{"id": 22, "op": "join", "channel": "deploys"}
+{"id": 23, "op": "leave", "channel": "deploys"}
+{"id": 24, "op": "participants"}
+{"id": 25, "op": "agents", "include_stale": false}
+{"id": 26, "op": "channels"}
+{"id": 27, "op": "channels_detailed"}
+{"id": 28, "op": "pause"}
+{"id": 29, "op": "resume"}
+{"id": 30, "op": "status"}
+{"id": 31, "op": "prune", "inactive_days": 30, "dry_run": false}
+{"id": 32, "op": "subscribe"}
 ```
 
-**Responses** echo the `id`:
+**4. Response (daemon → client)** — echoes the `id`. Data shapes are
+`ResponseData::SendOk` (`{message_id}`), `Messages`, `Agents`,
+`AgentsDetailed`, `Channels`, `ChannelsDetailed`, `Status`:
 
 ```json
-{"id": 17, "ok": true, "message_id": 42}
-{"id": 18, "ok": true, "messages": [{ ... }, { ... }]}
+{"id": 17, "ok": true,  "data": {"message_id": 42}}
+{"id": 18, "ok": true,  "data": {"messages": [{...}]}}
+{"id": 24, "ok": true,  "data": {"agents": ["master", "claude-code"]}}
+{"id": 17, "ok": false, "error": "body is 70000 bytes; max is 65536"}
 ```
 
-**Server-pushed events** carry no `id`:
+**Events (daemon → subscribed clients, no `id`)** — delivered to any
+connection that has issued `Op::Subscribe`:
 
 ```json
-{"event": "message", "to": "@codex", "from": "@claude-code", "body": "...", "message_id": 42}
+{"event": "message", "to": {"kind": "agent", "name": "codex"}, "from": "claude-code", "body": "...", "message_id": 42}
 {"event": "paused"}
+{"event": "resumed"}
 ```
 
-This is internal and not exposed to agents — agents only see MCP tools.
+The protocol is internal and not exposed to agents — agents see MCP
+tools, which are translated to/from these frames by `sidebar mcp`.
 
 ## 6. Data model
 
