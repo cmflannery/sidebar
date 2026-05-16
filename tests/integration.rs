@@ -132,6 +132,37 @@ fn broadcast_creates_no_extra_agents() {
 }
 
 #[test]
+fn send_rejects_empty_or_whitespace_recipient() {
+    let sb = Sandbox::new();
+
+    for bad in &["", "@", "#", "@   ", "#  "] {
+        let out = sb.run(&["send", bad, "ghost"]);
+        assert!(
+            !out.status.success(),
+            "send to {bad:?} should fail but succeeded"
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("invalid recipient"),
+            "wrong error for {bad:?}: {err}"
+        );
+    }
+
+    // Confirm no ghost rows accumulated.
+    let participants = sb.stdout(&["participants"]);
+    let count = participants.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(count, 1, "stray agents created:\n{participants}");
+
+    let channels = sb.stdout(&["channels"]);
+    for line in channels.lines() {
+        assert!(
+            line.trim().len() > 1, // `#name` always > 1 char
+            "empty channel slipped through: {channels:?}"
+        );
+    }
+}
+
+#[test]
 fn unknown_subcommand_fails() {
     let sb = Sandbox::new();
     let out = sb.run(&["nope-not-a-command"]);

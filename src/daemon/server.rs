@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 
 use crate::daemon::store::Store;
 use crate::proto::{Event, Hello, HelloAck, Op, Request, Response, ResponseData};
-use crate::types::Recipient;
+use crate::types::{Recipient, validate_name};
 
 #[derive(Clone)]
 pub struct Daemon {
@@ -149,8 +149,11 @@ async fn handle_conn(daemon: Arc<Daemon>, stream: UnixStream) -> Result<()> {
 
     let (agent_name, session_id, holds_name) = match &hello {
         Hello::Mcp { agent, .. } => {
+            if let Err(e) = validate_name(agent.trim()) {
+                anyhow::bail!("invalid mcp agent name `{agent}`: {e}");
+            }
             // Uniquify the name if it's already in use by another active session.
-            let assigned = daemon.reserve_unique_name(agent).await;
+            let assigned = daemon.reserve_unique_name(agent.trim()).await;
             let sid = daemon.store.open_session(&assigned).await?;
             if assigned == *agent {
                 info!(agent = %assigned, session = sid, "mcp client registered");
@@ -378,6 +381,14 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 };
             }
             let recipient = Recipient::parse(&to);
+            if let Err(e) = recipient.validate() {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!("invalid recipient `{to}`: {e}")),
+                    data: None,
+                };
+            }
             match daemon
                 .store
                 .send_message(agent_name, &recipient, &body, intent, reply_to)
@@ -418,6 +429,15 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
         },
         Op::Subscribe => Ok(ResponseData::SendOk { message_id: 0 }),
         Op::Schedule { to, body, when } => {
+            let recipient = Recipient::parse(&to);
+            if let Err(e) = recipient.validate() {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!("invalid recipient `{to}`: {e}")),
+                    data: None,
+                };
+            }
             let deliver_at = match when {
                 crate::proto::When::DelaySeconds { delay_seconds } => {
                     let secs = i64::try_from(delay_seconds).unwrap_or(i64::MAX);
@@ -431,16 +451,30 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|id| ResponseData::SendOk { message_id: id })
         }
-        Op::Join { channel } => daemon
-            .store
-            .join_channel(agent_name, &channel)
-            .await
-            .map(|()| ResponseData::SendOk { message_id: 0 }),
-        Op::Leave { channel } => daemon
-            .store
-            .leave_channel(agent_name, &channel)
-            .await
-            .map(|()| ResponseData::SendOk { message_id: 0 }),
+        Op::Join { channel } => {
+            let channel = channel.trim();
+            if let Err(e) = validate_name(channel) {
+                Err(anyhow::anyhow!("invalid channel `{channel}`: {e}"))
+            } else {
+                daemon
+                    .store
+                    .join_channel(agent_name, channel)
+                    .await
+                    .map(|()| ResponseData::SendOk { message_id: 0 })
+            }
+        }
+        Op::Leave { channel } => {
+            let channel = channel.trim();
+            if let Err(e) = validate_name(channel) {
+                Err(anyhow::anyhow!("invalid channel `{channel}`: {e}"))
+            } else {
+                daemon
+                    .store
+                    .leave_channel(agent_name, channel)
+                    .await
+                    .map(|()| ResponseData::SendOk { message_id: 0 })
+            }
+        }
         Op::Search { query, limit } => daemon
             .store
             .search_messages(&query, limit)

@@ -32,22 +32,46 @@ pub enum Recipient {
 }
 
 impl Recipient {
-    /// Parse the wire `to` field.
+    /// Parse the wire `to` field. Trims outer whitespace and the inner
+    /// name after the `@` or `#` prefix.
     /// - `@name`   → Agent
     /// - `#name`   → Channel
     /// - `*`       → Broadcast
     /// - bare name → Agent (forgiving)
     pub fn parse(s: &str) -> Self {
+        let s = s.trim();
         if s == "*" {
             Self::Broadcast
         } else if let Some(rest) = s.strip_prefix('@') {
-            Self::Agent(rest.to_string())
+            Self::Agent(rest.trim().to_string())
         } else if let Some(rest) = s.strip_prefix('#') {
-            Self::Channel(rest.to_string())
+            Self::Channel(rest.trim().to_string())
         } else {
             Self::Agent(s.to_string())
         }
     }
+
+    /// Reject empty names or names containing whitespace. Broadcast is
+    /// always valid. Returns the offending value for error messages.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let name = match self {
+            Self::Agent(n) | Self::Channel(n) => n,
+            Self::Broadcast => return Ok(()),
+        };
+        validate_name(name)
+    }
+}
+
+/// Shared name validator. Used by `Recipient::validate` and channel /
+/// agent ops that don't go through `Recipient`.
+pub fn validate_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() {
+        return Err("name must not be empty");
+    }
+    if name.chars().any(char::is_whitespace) {
+        return Err("name must not contain whitespace");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -78,6 +102,30 @@ mod tests {
     fn empty_string_is_agent_with_empty_name() {
         // Forgiving — daemon-side validation will reject it.
         assert!(matches!(Recipient::parse(""), Recipient::Agent(n) if n.is_empty()));
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace() {
+        assert!(matches!(Recipient::parse("  @alice  "), Recipient::Agent(n) if n == "alice"));
+        assert!(matches!(Recipient::parse("  #foo  "), Recipient::Channel(n) if n == "foo"));
+    }
+
+    #[test]
+    fn validate_rejects_empty() {
+        assert!(Recipient::Agent(String::new()).validate().is_err());
+        assert!(Recipient::Channel(String::new()).validate().is_err());
+        assert!(Recipient::Broadcast.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_whitespace_inside() {
+        assert!(Recipient::Agent("hi there".into()).validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_dashes_and_underscores() {
+        assert!(Recipient::Agent("claude-code-2".into()).validate().is_ok());
+        assert!(Recipient::Agent("bob_jr".into()).validate().is_ok());
     }
 
     #[test]

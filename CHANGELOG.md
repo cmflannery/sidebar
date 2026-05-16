@@ -7,6 +7,15 @@ in 0.x).
 
 ## [Unreleased]
 
+### Fixed
+- **Empty/whitespace recipients no longer create ghost agent/channel
+  rows.** Before this iteration, `sidebar send "" "x"`, `sidebar send
+  "@" "x"`, or `sidebar send "#" "x"` silently succeeded and created
+  an agent or channel with an empty name. Now dispatch validates the
+  parsed `Recipient` (and channel names in Join/Leave, and MCP Hello
+  agent names) and returns a clear `invalid recipient` error.
+  `Recipient::parse` also now trims leading/trailing whitespace.
+
 ### Added
 - **`sidebar channels [--details] [--json]`** — finally a CLI counterpart
   to the existing MCP `channels` tool. Plain mode lists channel names;
