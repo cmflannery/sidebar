@@ -1,15 +1,31 @@
-# Snippet for ~/.codex/config.toml — auto-approves sidebar's MCP tools so
-# they don't require per-call confirmation in interactive Codex sessions.
+# Codex MCP configuration for sidebar.
 #
-# Append to your existing config; do not replace it.
-
-[mcp_servers.sidebar.auto_approve]
-tools = [
-  "whoami",
-  "send",
-  "inbox",
-  "history",
-  "schedule",
-  "participants",
-  "channels",
-]
+# Codex's MCP integration (as of v0.130) doesn't surface a documented
+# config flag for per-tool auto-approval, so every `mcp__sidebar__*`
+# call lands as an approval prompt by default. Two known workarounds:
+#
+# 1. Interactive sessions: approve once, optionally select "always".
+# 2. Non-interactive `codex exec`: pass
+#      --dangerously-bypass-approvals-and-sandbox
+#    on the command line. This skips approval for every tool, not just
+#    sidebar's. Only do this for trusted scripted workflows like the
+#    flagship demos in examples/.
+#
+# If you want to wire sidebar into Codex without auto-approval at all,
+# `codex mcp add sidebar -- "$(which sidebar)" mcp --as codex` is the
+# minimum — see README "Adding sidebar to Codex" for details.
+#
+# This file is intentionally a doc placeholder; if/when Codex exposes a
+# config-level auto-approve list, the tool names you'd put there are
+# the same 10 tools sidebar's MCP server publishes:
+#
+#   whoami, send, inbox, history, search,
+#   participants, channels, join, leave, schedule
+#
+# Speculative schema (verify against your Codex version before using):
+#
+# [mcp_servers.sidebar.auto_approve]
+# tools = [
+#   "whoami", "send", "inbox", "history", "search",
+#   "participants", "channels", "join", "leave", "schedule",
+# ]
