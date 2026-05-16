@@ -18,6 +18,9 @@ in 0.x).
   with `body is N bytes; max is 65536`. Applies to both `Op::Send` and
   `Op::Schedule`. Bounds the daemon's memory footprint and keeps inbox
   output human-grokkable.
+- **Cap on agent/channel name length**: 64 characters. Same `validate_name`
+  helper used at every entry point (recipient parse, Join/Leave, Hello).
+  Rejects with `name must be 64 characters or fewer`.
 
 ### Fixed
 - **Empty/whitespace recipients no longer create ghost agent/channel

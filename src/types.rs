@@ -62,11 +62,20 @@ impl Recipient {
     }
 }
 
+/// Maximum length of an agent or channel name. Conservative enough that
+/// names fit on a single terminal line in `participants` / `channels`
+/// output; generous enough for any sane identifier (`claude-code-2`,
+/// `deploys-prod`, etc.). Body length is capped separately in the daemon.
+pub const MAX_NAME_LEN: usize = 64;
+
 /// Shared name validator. Used by `Recipient::validate` and channel /
 /// agent ops that don't go through `Recipient`.
 pub fn validate_name(name: &str) -> Result<(), &'static str> {
     if name.is_empty() {
         return Err("name must not be empty");
+    }
+    if name.len() > MAX_NAME_LEN {
+        return Err("name must be 64 characters or fewer");
     }
     if name.chars().any(char::is_whitespace) {
         return Err("name must not contain whitespace");
@@ -126,6 +135,16 @@ mod tests {
     fn validate_accepts_dashes_and_underscores() {
         assert!(Recipient::Agent("claude-code-2".into()).validate().is_ok());
         assert!(Recipient::Agent("bob_jr".into()).validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_oversized_names() {
+        let long = "x".repeat(65);
+        assert!(Recipient::Agent(long.clone()).validate().is_err());
+        assert!(Recipient::Channel(long).validate().is_err());
+        // Right at the limit is OK.
+        let limit = "x".repeat(64);
+        assert!(Recipient::Agent(limit).validate().is_ok());
     }
 
     #[test]

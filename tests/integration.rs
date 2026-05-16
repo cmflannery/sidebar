@@ -132,6 +132,33 @@ fn broadcast_creates_no_extra_agents() {
 }
 
 #[test]
+fn send_rejects_overlong_agent_name() {
+    let sb = Sandbox::new();
+    let too_long = "x".repeat(65);
+    let target = format!("@{too_long}");
+    let out = sb.run(&["send", &target, "hi"]);
+    assert!(!out.status.success(), "overlong name should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("64 characters"),
+        "expected length error, got: {err}"
+    );
+
+    // Confirm the runaway agent didn't slip into participants.
+    let participants = sb.stdout(&["participants"]);
+    assert!(!participants.contains(&too_long), "leaked: {participants}");
+}
+
+#[test]
+fn join_rejects_overlong_channel_name() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@alice", "create alice"]);
+    let too_long = "y".repeat(80);
+    let out = sb.run(&["join", &too_long, "--as", "alice"]);
+    assert!(!out.status.success(), "overlong channel name should fail");
+}
+
+#[test]
 fn send_rejects_oversized_body() {
     let sb = Sandbox::new();
     let huge = "x".repeat(64 * 1024 + 1);
