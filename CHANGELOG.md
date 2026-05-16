@@ -14,6 +14,10 @@ in 0.x).
   with its `sha256` sum, and attaches them to the GitHub Release.
 
 ### Changed
+- **Cap on `history` and `grep` result limits**: 1000 messages.
+  Larger requests return `limit N exceeds max of 1000`.
+- **Cap on `grep` query length**: 256 characters. A 1 MB substring
+  query is almost certainly a bug and the LIKE scan is pure waste.
 - **Cap on scheduled delivery delay**: 365 days from now. Beyond that,
   reject with a clear "max is 365 days" message. Past timestamps still
   fire on the next scheduler tick (intentional and tested).

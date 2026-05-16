@@ -300,6 +300,16 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 /// just deliver on the next scheduler tick.
 const MAX_SCHEDULE_DELAY_SECONDS: i64 = 60 * 60 * 24 * 365; // 1 year
 
+/// Hard cap on `history` and `search` result counts. Generous enough to
+/// answer "show me the last day" queries; small enough to keep the inbox
+/// response inside one network frame and the daemon's working set bounded.
+const MAX_QUERY_LIMIT: usize = 1000;
+
+/// Cap on the substring length for `search`. A 1 MB query would still
+/// match short bodies, but the LIKE scan and resulting memory copy is
+/// pure waste.
+const MAX_SEARCH_QUERY_LEN: usize = 256;
+
 async fn fetch_inbox_with_long_poll(
     daemon: &Daemon,
     agent_name: &str,
@@ -438,19 +448,29 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
             channel,
             with,
             limit,
-        } => match (channel, with) {
-            (Some(c), _) => daemon
-                .store
-                .history_channel(&c, limit)
-                .await
-                .map(|messages| ResponseData::Messages { messages }),
-            (None, Some(other)) => daemon
-                .store
-                .history_dm(agent_name, &other, limit)
-                .await
-                .map(|messages| ResponseData::Messages { messages }),
-            (None, None) => Err(anyhow::anyhow!("history requires --channel or --with")),
-        },
+        } => {
+            if limit > MAX_QUERY_LIMIT {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!("limit {limit} exceeds max of {MAX_QUERY_LIMIT}")),
+                    data: None,
+                };
+            }
+            match (channel, with) {
+                (Some(c), _) => daemon
+                    .store
+                    .history_channel(&c, limit)
+                    .await
+                    .map(|messages| ResponseData::Messages { messages }),
+                (None, Some(other)) => daemon
+                    .store
+                    .history_dm(agent_name, &other, limit)
+                    .await
+                    .map(|messages| ResponseData::Messages { messages }),
+                (None, None) => Err(anyhow::anyhow!("history requires --channel or --with")),
+            }
+        }
         Op::Subscribe => Ok(ResponseData::SendOk { message_id: 0 }),
         Op::Schedule { to, body, when } => {
             let recipient = Recipient::parse(&to);
@@ -523,11 +543,32 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                     .map(|()| ResponseData::SendOk { message_id: 0 })
             }
         }
-        Op::Search { query, limit } => daemon
-            .store
-            .search_messages(&query, limit)
-            .await
-            .map(|messages| ResponseData::Messages { messages }),
+        Op::Search { query, limit } => {
+            if query.len() > MAX_SEARCH_QUERY_LEN {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!(
+                        "search query is {} chars; max is {MAX_SEARCH_QUERY_LEN}",
+                        query.len()
+                    )),
+                    data: None,
+                };
+            }
+            if limit > MAX_QUERY_LIMIT {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!("limit {limit} exceeds max of {MAX_QUERY_LIMIT}")),
+                    data: None,
+                };
+            }
+            daemon
+                .store
+                .search_messages(&query, limit)
+                .await
+                .map(|messages| ResponseData::Messages { messages })
+        }
         Op::Pause => {
             daemon.paused.store(true, Ordering::Release);
             let _ = daemon.events.send(Event::Paused);

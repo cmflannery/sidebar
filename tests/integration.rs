@@ -159,6 +159,35 @@ fn join_rejects_overlong_channel_name() {
 }
 
 #[test]
+fn history_rejects_excessive_limit() {
+    let sb = Sandbox::new();
+    let out = sb.run(&["history", "--channel", "general", "--limit", "1001"]);
+    assert!(!out.status.success(), "limit > 1000 should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("exceeds max of 1000"), "got: {err}");
+
+    // 1000 is OK.
+    let ok = sb.run(&["history", "--channel", "general", "--limit", "1000"]);
+    assert!(ok.status.success(), "1000 should succeed");
+}
+
+#[test]
+fn grep_rejects_excessive_query_length_and_limit() {
+    let sb = Sandbox::new();
+    let long_query = "x".repeat(257);
+    let out = sb.run(&["grep", &long_query]);
+    assert!(!out.status.success(), "257-char query should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("256"),
+        "expected query-length error, got: {err}"
+    );
+
+    let out = sb.run(&["grep", "foo", "--limit", "1001"]);
+    assert!(!out.status.success(), "limit > 1000 should fail");
+}
+
+#[test]
 fn schedule_rejects_unreasonable_future() {
     let sb = Sandbox::new();
     // Two years out (in seconds) — beyond the 365-day cap.
