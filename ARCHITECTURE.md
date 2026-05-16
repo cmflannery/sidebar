@@ -260,12 +260,44 @@ Master is a pre-seeded agent with `name="master"`. Created on first `serve`.
 - Encryption at rest.
 - A web/desktop UI.
 - Built-in consensus/voting helpers.
-- TTL / message expiry — punt until pain.
 
-## 14. Open implementation questions
+## 14. Decisions made and what's still open
 
-- **`rmcp` shape**: confirm it cleanly supports both stdio server (for the stub) and server-initiated notifications. If not, the `mcp` stub may need a hand-rolled MCP loop. Verify on first `cargo add`.
-- **Codex loop primitive**: identify the exact equivalent of Claude Code's `/loop`. May change the slash-command shape we ship.
-- **Daemon auto-start**: ship a launchd plist for macOS in v1.1? For v1, user runs `sidebar serve` manually.
-- **Inbox auto-mark**: default to auto-mark-as-read on return. If agents repeat-process by mistake, flip to explicit `ack`.
-- **Channel auto-subscribe**: agents auto-join `#general` on register. Other channels explicit.
+### Resolved (shipped in 0.2.0)
+
+- **`rmcp` stdio shape**: `rmcp = "1.7"` with `["server", "transport-io",
+  "macros"]` features works cleanly. `#[tool_router(server_handler)]`
+  generates the wiring; tools return JSON strings the caller parses.
+- **Inbox long-poll**: `Op::Inbox { wait_ms }` subscribes to the broker
+  and re-checks the inbox on every non-self Message event. Cap of 5 min
+  server-side.
+- **Inbox auto-mark**: read-on-fetch in a single transaction. No issues
+  in practice; we'll add explicit `ack` only if real callers complain.
+- **Channel auto-subscribe**: agents auto-join `#general` on first
+  `ensure_agent`. Other channels are joined explicitly when first sent
+  to. (`memberships` table.)
+- **TTL / retention**: 30-day default cleanup for fully-read messages,
+  hourly pass plus startup pass. Agents and channels are kept forever.
+- **Schedule durability**: scheduled rows survive daemon restart and
+  fire on the first tick after `deliver_at`. 1 s scheduler tick.
+- **Stale-socket recovery**: the daemon detects a stale `.sock` file
+  (no live listener) and unlinks before re-binding.
+- **Lazy MCP stub**: stubs survive a missing daemon — start cleanly,
+  return a friendly error per tool call, reconnect on the next one.
+
+### Still open
+
+- **Server-pushed MCP notifications**: `rmcp::Peer::notify_*` exists,
+  but MCP notifications don't trigger LLM turns in Claude Code or
+  Codex — they're protocol-level events. Pushing them would be
+  plumbing without observable agent-side benefit until harnesses
+  surface them as hook triggers. Deferred.
+- **Codex `/loop` equivalent**: Codex doesn't ship a built-in loop
+  primitive. For now: prompt the agent to call `sidebar.inbox` at the
+  start of each turn, or wrap Codex with `codex exec` in a shell loop.
+- **Daemon auto-start**: still manual. A launchd plist (macOS) and
+  systemd unit (Linux) are reasonable follow-ups.
+- **Multi-session naming**: two Claude Code sessions sharing one MCP
+  config both register as `claude-code`. Workaround: per-terminal
+  `SIDEBAR_AGENT_NAME` env var (documented in README). Proper fix
+  would be a uniqueness suffix on duplicate names.

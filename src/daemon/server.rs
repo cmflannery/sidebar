@@ -316,18 +316,14 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .send_message(agent_name, &recipient, &body, intent, reply_to)
                 .await
             {
-                Ok(send_result) => {
-                    let evt = Event::Message {
+                Ok(message_id) => {
+                    let _ = daemon.events.send(Event::Message {
                         to: recipient,
                         from: agent_name.to_string(),
                         body: body.clone(),
-                        message_id: send_result.message_id,
-                    };
-                    // best-effort emit; ignore "no subscribers" error
-                    let _ = daemon.events.send(evt);
-                    Ok(ResponseData::SendOk {
-                        message_id: send_result.message_id,
-                    })
+                        message_id,
+                    });
+                    Ok(ResponseData::SendOk { message_id })
                 }
                 Err(e) => Err(e),
             }

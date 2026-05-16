@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::Mutex;
@@ -35,15 +35,6 @@ pub struct AgentRow {
     pub display_name: Option<String>,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SendResult {
-    pub message_id: i64,
-    /// Agent names that the new message was delivered to. Surfaces later
-    /// for per-recipient filtered subscriptions.
-    #[allow(dead_code)]
-    pub recipients: Vec<String>,
 }
 
 /// Persisted payload for a scheduled send. Stored as JSON in `scheduled.payload`.
@@ -139,7 +130,8 @@ impl Store {
         .await?
     }
 
-    /// Insert a message + delivery rows in one transaction.
+    /// Insert a message + per-recipient delivery rows in one transaction.
+    /// Returns the new message id.
     pub async fn send_message(
         &self,
         from_name: &str,
@@ -147,14 +139,14 @@ impl Store {
         body: &str,
         intent: Option<Intent>,
         reply_to: Option<i64>,
-    ) -> Result<SendResult> {
+    ) -> Result<i64> {
         let conn = self.conn.clone();
         let from_name = from_name.to_string();
         let to = to.clone();
         let body = body.to_string();
         let now = Utc::now().to_rfc3339();
 
-        tokio::task::spawn_blocking(move || -> Result<SendResult> {
+        tokio::task::spawn_blocking(move || -> Result<i64> {
             let mut conn = conn.blocking_lock();
             let tx = conn.transaction()?;
 
@@ -181,37 +173,26 @@ impl Store {
             )?;
             let msg_id = tx.last_insert_rowid();
 
-            // Compute recipient agent ids.
-            let recipient_ids: Vec<(i64, String)> = match &to {
-                Recipient::Agent(_) => {
-                    let id = to_agent.expect("agent recipient must have id");
-                    let name = agent_name_blocking(&tx, id)?;
-                    vec![(id, name)]
-                }
+            let recipient_ids: Vec<i64> = match &to {
+                Recipient::Agent(_) => vec![to_agent.expect("agent id set above")],
                 Recipient::Channel(_) => {
-                    let cid = to_channel.expect("channel recipient must have id");
+                    let cid = to_channel.expect("channel id set above");
                     let mut stmt = tx.prepare(
-                        "SELECT a.id, a.name FROM agents a
+                        "SELECT a.id FROM agents a
                          JOIN memberships m ON m.agent_id = a.id
                          WHERE m.channel_id = ?1 AND a.id != ?2",
                     )?;
-                    stmt.query_map(params![cid, from_id], |r| {
-                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
+                    stmt.query_map(params![cid, from_id], |r| r.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
                 }
                 Recipient::Broadcast => {
-                    let mut stmt = tx.prepare(
-                        "SELECT id, name FROM agents WHERE id != ?1",
-                    )?;
-                    stmt.query_map(params![from_id], |r| {
-                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
+                    let mut stmt = tx.prepare("SELECT id FROM agents WHERE id != ?1")?;
+                    stmt.query_map(params![from_id], |r| r.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
                 }
             };
 
-            for (aid, _) in &recipient_ids {
+            for aid in &recipient_ids {
                 tx.execute(
                     "INSERT OR IGNORE INTO deliveries (message_id, agent_id, delivered_at)
                      VALUES (?1, ?2, ?3)",
@@ -220,11 +201,7 @@ impl Store {
             }
 
             tx.commit()?;
-
-            Ok(SendResult {
-                message_id: msg_id,
-                recipients: recipient_ids.into_iter().map(|(_, n)| n).collect(),
-            })
+            Ok(msg_id)
         })
         .await?
     }
@@ -626,13 +603,6 @@ fn ensure_channel_blocking(conn: &Connection, name: &str) -> Result<i64> {
         params![name, now],
     )?;
     Ok(conn.last_insert_rowid())
-}
-
-fn agent_name_blocking(conn: &Connection, id: i64) -> Result<String> {
-    conn.query_row("SELECT name FROM agents WHERE id = ?1", params![id], |r| {
-        r.get(0)
-    })
-    .map_err(|e| anyhow!("agent {id} not found: {e}"))
 }
 
 fn seed_defaults(conn: &Connection) -> Result<()> {

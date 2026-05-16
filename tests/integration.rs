@@ -383,6 +383,45 @@ fn schedule_persists_across_daemon_restart() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// 64 parallel sends from threads must all land in history with no
+/// duplicates, no losses, and no SQLite contention errors. Catches
+/// regressions in the daemon's spawn_blocking + Mutex<Connection> model.
+#[test]
+fn concurrent_sends_all_land_in_history() {
+    const N: usize = 64;
+    let sb = Sandbox::new();
+    let bin = sidebar_bin();
+    let home = sb.home.clone();
+
+    let handles: Vec<_> = (0..N)
+        .map(|i| {
+            let bin = bin.clone();
+            let home = home.clone();
+            std::thread::spawn(move || {
+                Command::new(&bin)
+                    .args(["send", "#general", &format!("concurrent-msg-{i:03}")])
+                    .env("SIDEBAR_HOME", &home)
+                    .output()
+                    .expect("send")
+            })
+        })
+        .collect();
+
+    for h in handles {
+        let out = h.join().unwrap();
+        assert!(out.status.success(), "send failed: {:?}", out.stderr);
+    }
+
+    let history = sb.stdout(&["history", "--channel", "general", "--limit", "200"]);
+    for i in 0..N {
+        let needle = format!("concurrent-msg-{i:03}");
+        assert!(history.contains(&needle), "lost message: {needle}");
+    }
+    // Exactly N lines should match; no duplicates.
+    let count = history.matches("concurrent-msg-").count();
+    assert_eq!(count, N, "expected {N} messages, got {count}\n{history}");
+}
+
 /// The marquee end-to-end: two `sidebar mcp` stubs (alice + bob) communicate
 /// through the daemon. Alice sends via tools/call send; bob's tools/call
 /// inbox(wait_ms) returns alice's message.
