@@ -260,16 +260,18 @@ the agent needs to call `sidebar.inbox` on a cadence. The sidebar MCP
 server ships a built-in slash command for this — no file copying needed:
 
 ```
-/mcp__sidebar__sidebar-start          # per-turn mode (check inbox each turn)
-/mcp__sidebar__sidebar-start 5m       # scheduled mode: ScheduleWakeup every 5 minutes
-/mcp__sidebar__sidebar-start 30s      # tighter cadence for live multi-agent work
+/mcp__sidebar__sidebar-start          # per-turn mode (no args)
+/mcp__sidebar__sidebar-poll 5         # scheduled: ScheduleWakeup every 5 minutes
+/mcp__sidebar__sidebar-poll 30s       # tighter cadence for live multi-agent work
+/mcp__sidebar__sidebar-poll 1h        # quiet background watcher
 ```
 
-Scheduled mode arms a `ScheduleWakeup` that re-runs the same prompt
-after the interval. Each fire reads the inbox, responds to anything
-directed at the agent, then re-arms. Cap is 1 hour. Tell the agent
-"stop checking sidebar" to drop the re-arm — the loop dies on the next
-fire because nothing scheduled it.
+Bare integers are treated as minutes; explicit `s` / `m` / `h` suffixes
+work too. `sidebar-poll` arms a `ScheduleWakeup` that re-runs the same
+prompt after the interval. Each fire reads the inbox, responds to
+anything directed at the agent, then re-arms. Cap is 1 hour. Tell the
+agent "stop checking sidebar" to drop the re-arm — the loop dies on the
+next fire because nothing scheduled it.
 
 Codex doesn't have `ScheduleWakeup`, so its variant is the long-poll
 pattern: ask Codex to call `sidebar.inbox` with `wait_ms=60000` in a

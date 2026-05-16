@@ -276,32 +276,39 @@ impl SidebarMcp {
 // `/mcp__sidebar__sidebar-start` available with no extra file copying.
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SidebarStartArgs {
-    /// Optional polling interval (e.g. `30s`, `5m`, `1h`). When set, the
-    /// agent arms a recurring ScheduleWakeup that re-runs this prompt.
-    /// Omit for per-turn mode.
-    #[serde(default)]
-    interval: Option<String>,
+struct SidebarPollArgs {
+    /// Polling interval — `5` or `5m` for minutes, `30s` for seconds,
+    /// `1h` for hours. Bare integers are treated as minutes. Max 1 hour.
+    interval: String,
 }
 
 #[prompt_router(router = "prompt_router")]
 impl SidebarMcp {
     #[prompt(
         name = "sidebar-start",
-        description = "Register with sidebar. Optional `interval` (e.g. `5m`) arms a recurring inbox check via ScheduleWakeup."
+        description = "Bootstrap a sidebar session (whoami + participants), then check inbox at the top of every turn. No arguments."
     )]
-    async fn sidebar_start(
+    async fn sidebar_start(&self) -> Vec<PromptMessage> {
+        vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            SIDEBAR_START_PER_TURN,
+        )]
+    }
+
+    #[prompt(
+        name = "sidebar-poll",
+        description = "Set up a recurring inbox check via ScheduleWakeup. Pass an interval like `5` (minutes), `30s`, `5m`, `1h`."
+    )]
+    async fn sidebar_poll(
         &self,
-        Parameters(args): Parameters<SidebarStartArgs>,
+        Parameters(args): Parameters<SidebarPollArgs>,
     ) -> Vec<PromptMessage> {
-        let body = match args.interval.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            None => SIDEBAR_START_PER_TURN.to_string(),
-            Some(raw) => match parse_interval(raw) {
-                Some(secs) => render_sidebar_start_scheduled(raw, secs),
-                None => format!(
-                    "The interval `{raw}` isn't a recognized format. Use values like `30s`, `5m`, `1h` (max 1 hour). Ask the user to re-run with a valid interval; do not call any tools or `ScheduleWakeup`."
-                ),
-            },
+        let raw = args.interval.trim();
+        let body = match parse_interval(raw) {
+            Some((human, secs)) => render_sidebar_poll(&human, secs),
+            None => format!(
+                "The interval `{raw}` isn't a recognized format. Use values like `5` (minutes), `30s`, `5m`, `1h` (max 1 hour). Ask the user to re-run with a valid interval; do not call any tools or `ScheduleWakeup`."
+            ),
         };
         vec![PromptMessage::new_text(PromptMessageRole::User, body)]
     }
@@ -316,7 +323,7 @@ Do these in one short message:\n\
 \n\
 For every turn from now on, before doing anything else, call `mcp__sidebar__inbox` (no `wait_ms`). For messages addressed to you (DMs, or `@<your-name>` in a channel/broadcast), respond concisely. If empty, continue with whatever the user asked.";
 
-fn render_sidebar_start_scheduled(human: &str, seconds: u64) -> String {
+fn render_sidebar_poll(human: &str, seconds: u64) -> String {
     format!(
         "You are running a sidebar session with a scheduled inbox poll every {human}.\n\
 \n\
@@ -330,7 +337,7 @@ On every fire (including this one):\n\
 2. For messages addressed to you (DMs or `@<your-name>` in channel/broadcast), respond concisely. Stay quiet on other channel chatter unless it changes something the user cares about.\n\
 3. Call `ScheduleWakeup` with:\n\
    - `delaySeconds`: {seconds}\n\
-   - `prompt`: `/mcp__sidebar__sidebar-start {human}`\n\
+   - `prompt`: `/mcp__sidebar__sidebar-poll {human}`\n\
    - `reason`: `sidebar inbox poll`\n\
 \n\
 Stopping: if the user has just told you to \"stop checking sidebar\", \"stop the sidebar loop\", or \"pause sidebar polling\", do not call `ScheduleWakeup` on this fire. The loop dies because nothing re-armed it.\n\
@@ -339,21 +346,30 @@ If `mcp__sidebar__inbox` returns `{{\"ok\": false, ...}}`, mention the error bri
     )
 }
 
-/// Parse strings like `30s`, `5m`, `1h` into seconds. Caps at 1 hour.
-fn parse_interval(s: &str) -> Option<u64> {
+/// Parse `5`, `5m`, `30s`, `1h` etc. into (canonical-form, seconds). Bare
+/// integers are treated as minutes. Caps at 1 hour. Rejects 0.
+fn parse_interval(s: &str) -> Option<(String, u64)> {
     let s = s.trim();
-    let (num_str, unit) = s.split_at(s.len().checked_sub(1)?);
+    if s.is_empty() {
+        return None;
+    }
+    let last = s.chars().last()?;
+    let (num_str, unit) = if last.is_ascii_digit() {
+        (s, 'm')
+    } else {
+        (&s[..s.len() - last.len_utf8()], last)
+    };
     let num: u64 = num_str.parse().ok()?;
     let secs = match unit {
-        "s" => num,
-        "m" => num.checked_mul(60)?,
-        "h" => num.checked_mul(3600)?,
+        's' => num,
+        'm' => num.checked_mul(60)?,
+        'h' => num.checked_mul(3600)?,
         _ => return None,
     };
     if secs == 0 || secs > 3600 {
         return None;
     }
-    Some(secs)
+    Some((format!("{num}{unit}"), secs))
 }
 
 // ---- ServerHandler ----
