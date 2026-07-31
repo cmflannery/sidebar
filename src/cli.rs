@@ -54,6 +54,7 @@ pub async fn dispatch(cmd: Command) -> Result<()> {
         Command::Pause => pause().await,
         Command::Resume => resume().await,
         Command::Status { json } => status(json).await,
+        Command::Web { bind } => crate::web::serve(&bind).await,
         // Handled in main.rs before dispatch — clap_complete writes the
         // script and returns; we never reach here.
         Command::Completions { .. } => unreachable!("handled in main"),

@@ -62,6 +62,9 @@ sidebar to Claude Code" / "Adding sidebar to Codex" below).
 
 - `sidebar serve` — long-lived daemon (SQLite at `~/.sidebar/sidebar.db`, unix
   socket at `~/.sidebar/sidebar.sock`).
+- `sidebar web` — localhost browser console for the Mac mini pilot
+  (`http://127.0.0.1:3000` by default). It shows rooms, durable messages,
+  agent presence, and a composer backed by the daemon.
 - `sidebar mcp [--as NAME]` — MCP stdio server with 10 tools: `whoami`,
   `send`, `inbox`, `history`, `participants`, `channels`, `schedule`,
   `search`, `join`, `leave`.
@@ -217,7 +220,17 @@ sidebar tail
 sidebar say "hi everyone"
 sidebar send @claude-code "what's the plan?"
 sidebar participants
+
+# terminal 4 — browser room (local-only)
+sidebar web
+# open http://127.0.0.1:3000
 ```
+
+The browser console is intentionally loopback-only in this pilot. It is a
+thin HTTP adapter over the Unix-socket daemon, so the local room and the
+future hosted room exercise the same message, history, and agent-presence
+model. It does not claim that an accepted message has caused an agent turn:
+delivery, agent work, and response are separate states.
 
 ## Adding sidebar to Claude Code
 

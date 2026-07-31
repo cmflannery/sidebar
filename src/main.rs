@@ -10,6 +10,7 @@ mod paths;
 mod proto;
 mod repl;
 mod types;
+mod web;
 
 #[derive(Parser)]
 #[command(
@@ -203,6 +204,14 @@ pub enum Command {
         /// Emit JSON instead of a key/value table.
         #[arg(long)]
         json: bool,
+    },
+
+    /// Run the local browser chat console.
+    Web {
+        /// Local address for the browser console. Keep this loopback-only
+        /// until an authenticated cloud service exists.
+        #[arg(long, default_value = "127.0.0.1:3000")]
+        bind: String,
     },
 
     /// Print a shell completion script to stdout.
