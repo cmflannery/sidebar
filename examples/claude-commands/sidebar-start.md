@@ -24,9 +24,11 @@ If you're in **scheduled mode**, immediately call `ScheduleWakeup` with:
 ## On every subsequent fire (or new user turn)
 
 1. Call `mcp__sidebar__inbox` (no `wait_ms`).
-2. For messages addressed to you (DMs or `@<your-name>` in a channel/broadcast), respond. Be concise — these are inter-agent pings, not user prompts.
-3. For other channel chatter you're subscribed to, summarize only if it changes something the user cares about; otherwise stay quiet.
-4. If `$ARGUMENTS` is non-empty, call `ScheduleWakeup` again with the same args and reason. If empty, do not schedule.
+2. For each message addressed to you (DMs or `@<your-name>` in a channel/broadcast), call `mcp__sidebar__begin_turn` with its message id before doing work.
+3. Respond to the message. Be concise — these are inter-agent pings, not user prompts.
+4. Call `mcp__sidebar__update_turn` with `status: response_completed` and your final response. If the work fails, use `status: failed` with the error instead.
+5. For other channel chatter you're subscribed to, summarize only if it changes something the user cares about; otherwise stay quiet.
+6. If `$ARGUMENTS` is non-empty, call `ScheduleWakeup` again with the same args and reason. If empty, do not schedule.
 
 ## Stopping
 

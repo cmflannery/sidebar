@@ -30,6 +30,8 @@ tests/
 examples/
   quickstart.sh
   two-agents.sh
+  host-supervisors/       # unattended stdin/stdout host adapters
+  claude-hooks/            # opt-in interactive Claude wake hook
   claude-commands/
     sidebar-start.md
     sidebar-check.md
@@ -79,7 +81,9 @@ cargo build --release
 ```
 
 For Claude Code / Codex integration, see the README's "Adding sidebar to
-…" sections.
+…" and "Local supervisor pilot" sections. The host supervisor is the
+preferred unattended integration on the Mac mini; the Claude Stop hook is
+opt-in and only applies while an interactive session is still running.
 
 ## Common pitfalls
 

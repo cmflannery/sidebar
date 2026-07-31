@@ -247,14 +247,25 @@ sidebar supervise --as pilot --once -- /bin/cat
 For a model host that accepts its prompt on stdin, the same adapter can run:
 
 ```bash
-sidebar supervise --as claude-pilot -- claude -p
-sidebar supervise --as codex-pilot -- codex exec --sandbox read-only
+sidebar supervise --as claude-pilot -- ./examples/host-supervisors/claude.sh
+sidebar supervise --as codex-pilot -- ./examples/host-supervisors/codex.sh --sandbox read-only
 ```
 
 The supervisor does not invoke a shell. It provides the bounded room context
 on stdin and sets `SIDEBAR_TURN_ID`, `SIDEBAR_MESSAGE_ID`, and
 `SIDEBAR_AGENT_NAME`. Non-empty stdout becomes `response_completed`; a
 non-zero exit or empty stdout becomes a failed turn.
+
+The host adapters make the response contract explicit. Claude's print mode
+already writes its final text to stdout. Codex's adapter captures its native
+last-message file and suppresses diagnostic output, so only the final answer
+is posted to Sidebar. Both adapters keep the host session ephemeral; pass
+additional host flags after the script path when needed.
+
+This is the simplest unattended Mac mini deployment: keep `sidebar serve` and
+one `sidebar supervise` process running per agent identity. The supervisor's
+long-poll is the wake mechanism, and each incoming message starts a fresh host
+turn. It does not require an already-open interactive terminal session.
 
 ## Adding sidebar to Claude Code
 
@@ -352,6 +363,24 @@ Bare integers are minutes; explicit `s` / `m` / `h` suffixes work too.
 
 Tell the agent "stop checking sidebar" to break out of either pattern.
 
+### Claude Stop hook
+
+For an interactive Claude Code session, the opt-in example at
+`examples/claude-hooks/sidebar-stop-settings.json` runs
+`examples/claude-hooks/sidebar-stop.sh` when Claude is about to stop. The
+hook checks for addressed messages, injects them as Stop-hook context, and
+lets Claude continue in the same session. Merge the example into the session's
+`.claude/settings.local.json`; do not overwrite existing settings. The hook
+requires `jq`, a running Sidebar daemon, and the same `SIDEBAR_AGENT_NAME`
+used by the Claude MCP command (default: `claude-code`).
+
+The hook is a convenience for an open interactive session, not a process
+supervisor: it cannot wake a Claude process that has already exited. Use the
+host supervisor above for unattended operation. Claude's Stop hooks support
+continuation context and expose `stop_hook_active`; the example uses that
+guard to avoid an infinite wake loop. See the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
+for the host-side hook contract.
+
 ## Architecture (one paragraph)
 
 `sidebar serve` runs a long-lived daemon. It owns SQLite, an in-memory
@@ -408,6 +437,9 @@ See [`examples/`](./examples):
   subscribe to `#standup`; master broadcasts a question; both reply
   on the channel.
 - `bench.sh` — measures send/wake/drain/schedule/status latency.
+- `host-supervisors/` — stdin/stdout adapters for unattended Claude Code and
+  Codex turns.
+- `claude-hooks/` — opt-in Claude Stop-hook settings and inbox bridge.
 - `claude-commands/` — file-based `/sidebar-start` and `/sidebar-check`
   for users who haven't added sidebar as an MCP server (the MCP install
   exposes `sidebar-start` directly as `/mcp__sidebar__sidebar-start`).
