@@ -2,17 +2,23 @@
 // Silencing until the bodies are real.
 #![allow(clippy::unused_async)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::Command;
 use crate::client::Client;
-use crate::proto::{Op, ResponseData};
+use crate::proto::{Op, ResponseData, TurnStatus};
 use crate::types::Recipient;
 
 pub async fn dispatch(cmd: Command) -> Result<()> {
     match cmd {
         Command::Serve => serve().await,
         Command::Mcp { as_name } => mcp(as_name).await,
+        Command::Supervise {
+            as_name,
+            wait_ms,
+            once,
+            command,
+        } => supervise(as_name, wait_ms, once, command).await,
         Command::Tail { json, filter } => tail(json, filter).await,
         Command::Send { to, body } => send(to, body).await,
         Command::Schedule {
@@ -216,6 +222,136 @@ async fn mcp(as_name: Option<String>) -> Result<()> {
         .or_else(|| std::env::var("SIDEBAR_AGENT_NAME").ok())
         .unwrap_or_else(|| format!("agent-{}", std::process::id()));
     crate::mcp::serve(name).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn supervise(as_name: String, wait_ms: u64, once: bool, command: Vec<String>) -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+    use tokio::process::Command as ProcessCommand;
+
+    let Some((program, args)) = command.split_first() else {
+        anyhow::bail!("supervise requires a host command after `--`");
+    };
+    let mut client = Client::connect_mcp(&as_name, env!("CARGO_PKG_VERSION")).await?;
+    eprintln!(
+        "supervisor `{}` listening as @{} (wait {}ms)",
+        program,
+        client.assigned_name(),
+        wait_ms.min(300_000)
+    );
+
+    loop {
+        let response = client
+            .request(Op::Inbox {
+                wait_ms: Some(wait_ms),
+                mentions_only: true,
+            })
+            .await?;
+        let Some(ResponseData::Messages { messages }) = response.data else {
+            anyhow::bail!("unexpected inbox response: {response:?}");
+        };
+
+        for message in messages {
+            let client_turn_id = format!("supervisor-{}-{}", std::process::id(), message.id);
+            let begin = client
+                .request(Op::BeginTurn {
+                    message_id: message.id,
+                    client_turn_id: Some(client_turn_id),
+                })
+                .await?;
+            if !begin.ok {
+                eprintln!(
+                    "could not begin turn for message {}: {}",
+                    message.id,
+                    begin.error.unwrap_or_else(|| "unknown error".into())
+                );
+                continue;
+            }
+            let Some(ResponseData::Turn { turn }) = begin.data else {
+                anyhow::bail!("unexpected begin_turn response: {begin:?}");
+            };
+            client
+                .request(Op::UpdateTurn {
+                    turn_id: turn.turn_id.clone(),
+                    status: TurnStatus::Started,
+                    response: None,
+                    error: None,
+                })
+                .await?;
+
+            let envelope = supervisor_prompt(&message);
+            let mut child = ProcessCommand::new(program)
+                .args(args)
+                .env("SIDEBAR_TURN_ID", &turn.turn_id)
+                .env("SIDEBAR_MESSAGE_ID", message.id.to_string())
+                .env("SIDEBAR_AGENT_NAME", client.assigned_name())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .with_context(|| format!("starting supervisor host command `{program}`"))?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(envelope.as_bytes()).await?;
+                stdin.shutdown().await?;
+            }
+            let output = child.wait_with_output().await?;
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let succeeded = output.status.success() && !stdout.is_empty();
+            let update = if succeeded {
+                Op::UpdateTurn {
+                    turn_id: turn.turn_id.clone(),
+                    status: TurnStatus::ResponseCompleted,
+                    response: Some(stdout.clone()),
+                    error: None,
+                }
+            } else {
+                let error = if stderr.is_empty() {
+                    format!("host command exited with status {}", output.status)
+                } else {
+                    stderr
+                };
+                Op::UpdateTurn {
+                    turn_id: turn.turn_id.clone(),
+                    status: TurnStatus::Failed,
+                    response: None,
+                    error: Some(error),
+                }
+            };
+            let updated = client.request(update).await?;
+            if updated.ok {
+                if succeeded {
+                    println!("turn {} completed", turn.turn_id);
+                } else {
+                    eprintln!("turn {} failed: host produced no response", turn.turn_id);
+                }
+            } else {
+                eprintln!(
+                    "could not finish turn {}: {}",
+                    turn.turn_id,
+                    updated.error.unwrap_or_else(|| "unknown error".into())
+                );
+            }
+        }
+
+        if once {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn supervisor_prompt(message: &crate::types::Message) -> String {
+    let destination = match &message.to {
+        crate::types::Recipient::Agent(name) => format!("@{name}"),
+        crate::types::Recipient::Channel(name) => format!("#{name}"),
+        crate::types::Recipient::Broadcast => "*".to_string(),
+    };
+    format!(
+        "You are replying as a participant in a durable agent room.\n\nMessage id: {}\nFrom: {}\nTo: {}\n\nMessage:\n{}\n\nReturn only the final human-readable response. Do not include supervisor metadata or tool logs.",
+        message.id, message.from, destination, message.body
+    )
 }
 
 async fn tail(json: bool, filter: Option<String>) -> Result<()> {

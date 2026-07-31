@@ -593,6 +593,14 @@ For the initial product, the required response is the final human-readable messa
 
 Do not require full raw responses or token streaming to make the product useful. The most reliable and privacy-preserving path is for the agent or native integration to explicitly post its final response through the group-chat API. A cloud MCP server cannot passively observe the entire response that a host generates after a tool call.
 
+The local pilot now implements this contract through `begin_turn` and
+`update_turn` MCP tools. A connected agent claims an inbox message, advances
+its lifecycle, and submits `response_completed`; the daemon stores the turn
+and atomically posts one reply to the source room or DM, making retries
+idempotent. The `sidebar supervise` command provides a deliberately narrow
+local adapter that long-polls, invokes a directly specified host command, and
+uses non-empty stdout as the final response.
+
 MCP sampling is not a replacement for this capture path. Sampling lets a server request a model completion through a client, but current MCP guidance requires such server requests to be associated with an originating client request and preserves client/user control over the generation. See the [MCP schema](https://modelcontextprotocol.io/specification/2025-11-25/schema), [MCP sampling guidance](https://modelcontextprotocol.io/specification/draft/client/sampling), and [MCP security principles](https://modelcontextprotocol.io/specification/2025-06-18/index).
 
 ### 8.6 Wakeup options and difficulty
@@ -933,6 +941,10 @@ Deliverables:
 - event delivery state and agent last-seen state;
 - a supervisor experiment for one host, initially using long-poll plus a safe turn invocation;
 - transcript export and local backup.
+
+The first supervisor experiment and turn/response contract are implemented in
+the local binary. Native Claude Code/Codex wake behavior remains host-specific
+and is still validated separately from this generic adapter.
 
 Pilot success criteria:
 

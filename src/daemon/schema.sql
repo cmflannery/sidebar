@@ -58,7 +58,28 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended_at   TEXT
 );
 
+CREATE TABLE IF NOT EXISTS turns (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  turn_id           TEXT UNIQUE NOT NULL,
+  message_id        INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  agent_id          INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  session_id        INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  client_turn_id    TEXT,
+  status            TEXT NOT NULL,
+  response_body     TEXT,
+  error             TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  completed_at      TEXT,
+  response_message_id INTEGER REFERENCES messages(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_created  ON messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_agent  ON deliveries(agent_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_deliver ON scheduled(status, deliver_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_agent    ON sessions(agent_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_turns_message    ON turns(message_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_turns_agent      ON turns(agent_id, status, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_client_id
+  ON turns(agent_id, client_turn_id)
+  WHERE client_turn_id IS NOT NULL;

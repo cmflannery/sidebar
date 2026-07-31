@@ -1236,6 +1236,123 @@ fn two_mcp_stubs_can_exchange_messages() {
 }
 
 #[test]
+fn mcp_turn_lifecycle_posts_one_threaded_response() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@bob", "Please review the pilot"]);
+
+    let mut child = Command::new(sidebar_bin())
+        .args(["mcp", "--as", "bob"])
+        .env("SIDEBAR_HOME", &sb.home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mcp stub");
+    let mut stdin = child.stdin.take().expect("mcp stdin");
+    let stdout = child.stdout.take().expect("mcp stdout");
+    let mut reader = BufReader::new(stdout);
+
+    let initialize = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"turn-test","version":"0.1"}}}"#,
+    );
+    assert!(
+        initialize.contains("serverInfo"),
+        "MCP initialize failed: {initialize}"
+    );
+    stdin
+        .write_all(
+            br#"{"jsonrpc":"2.0","method":"notifications/initialized"}
+"#,
+        )
+        .expect("write initialized notification");
+    let inbox = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"inbox","arguments":{}}}"#,
+    );
+    assert!(
+        inbox.contains("Please review the pilot"),
+        "inbox missed message: {inbox}"
+    );
+    let begin = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"begin_turn","arguments":{"message_id":1,"client_turn_id":"turn-test-1"}}}"#,
+    );
+    assert!(begin.contains("turn-1"), "turn did not begin: {begin}");
+    let started = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"update_turn","arguments":{"turn_id":"turn-1","status":"started"}}}"#,
+    );
+    assert!(started.contains("started"), "turn did not start: {started}");
+    let completed = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update_turn","arguments":{"turn_id":"turn-1","status":"response_completed","response":"Review complete: the pilot path is working."}}}"#,
+    );
+    assert!(
+        completed.contains("response_completed") && completed.contains("response_message_id"),
+        "turn did not complete: {completed}"
+    );
+    // A retry of the terminal update must not post a duplicate message.
+    let retry = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"update_turn","arguments":{"turn_id":"turn-1","status":"response_completed"}}}"#,
+    );
+    assert!(
+        retry.contains("response_completed"),
+        "terminal retry failed: {retry}"
+    );
+    drop(stdin);
+    drop(reader);
+    child.wait().expect("wait mcp stub");
+
+    let history = sb.stdout(&["history", "--with", "bob", "--json", "--limit", "10"]);
+    assert!(
+        history.contains("Review complete: the pilot path is working."),
+        "response missing from DM history: {history}"
+    );
+    assert_eq!(
+        history
+            .matches("Review complete: the pilot path is working.")
+            .count(),
+        1,
+        "terminal retry duplicated the response: {history}"
+    );
+}
+
+#[test]
+fn local_supervisor_captures_host_stdout_as_response() {
+    let sb = Sandbox::new();
+    #[allow(clippy::zombie_processes)]
+    let supervisor = Command::new(sidebar_bin())
+        .args(["supervise", "--as", "pilot", "--once", "--", "/bin/cat"])
+        .env("SIDEBAR_HOME", &sb.home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn supervisor");
+    std::thread::sleep(Duration::from_millis(100));
+
+    sb.stdout(&["send", "@pilot", "supervisor smoke test"]);
+    let output = supervisor.wait_with_output().expect("wait supervisor");
+    assert!(output.status.success(), "supervisor failed: {output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("completed"),
+        "supervisor did not complete: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let history = sb.stdout(&["history", "--with", "pilot", "--json", "--limit", "10"]);
+    assert!(history.contains("supervisor smoke test"));
+    assert!(history.contains("Return only the final human-readable response"));
+}
+
+#[test]
 fn agents_json_reports_active_mcp_sessions() {
     let sb = Sandbox::new();
     let mut child = Command::new(sidebar_bin())

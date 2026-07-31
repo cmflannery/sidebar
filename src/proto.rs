@@ -73,6 +73,26 @@ pub enum Op {
         #[serde(default = "default_limit")]
         limit: usize,
     },
+    /// Claim a delivered message as an agent turn.
+    BeginTurn {
+        message_id: i64,
+        #[serde(default)]
+        client_turn_id: Option<String>,
+    },
+    /// Advance a turn and optionally post the final response to the source
+    /// room/thread when status is response_completed.
+    UpdateTurn {
+        turn_id: String,
+        status: TurnStatus,
+        #[serde(default)]
+        response: Option<String>,
+        #[serde(default)]
+        error: Option<String>,
+    },
+    /// Inspect a turn by its public id.
+    GetTurn {
+        turn_id: String,
+    },
     Schedule {
         to: String,
         body: String,
@@ -177,6 +197,9 @@ pub enum ResponseData {
     MessagesDetailed {
         messages_detailed: Vec<MessageWithDelivery>,
     },
+    Turn {
+        turn: TurnRecord,
+    },
     Agents {
         agents: Vec<String>,
     },
@@ -206,6 +229,61 @@ pub struct MessageDetail {
 pub struct MessageWithDelivery {
     pub message: Message,
     pub deliveries: Vec<MessageDelivery>,
+    pub turns: Vec<TurnRecord>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStatus {
+    Created,
+    Delivered,
+    Requested,
+    Started,
+    Progress,
+    WaitingForApproval,
+    ResponseStarted,
+    ResponseCompleted,
+    Failed,
+    Cancelled,
+}
+
+impl TurnStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::ResponseCompleted | Self::Failed | Self::Cancelled
+        )
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Delivered => "delivered",
+            Self::Requested => "requested",
+            Self::Started => "started",
+            Self::Progress => "progress",
+            Self::WaitingForApproval => "waiting_for_approval",
+            Self::ResponseStarted => "response_started",
+            Self::ResponseCompleted => "response_completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnRecord {
+    pub turn_id: String,
+    pub message_id: i64,
+    pub agent: String,
+    pub status: TurnStatus,
+    pub client_turn_id: Option<String>,
+    pub response: Option<String>,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub response_message_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

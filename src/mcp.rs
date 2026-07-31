@@ -21,7 +21,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::client::Client;
-use crate::proto::{Op, ResponseData, When};
+use crate::proto::{Op, ResponseData, TurnStatus, When};
 use crate::types::Recipient;
 
 #[derive(Clone)]
@@ -120,6 +120,30 @@ struct ScheduleArgs {
     at: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BeginTurnArgs {
+    /// Message id returned by inbox that this agent is going to handle.
+    message_id: i64,
+    /// Stable host-local id used to make retries idempotent.
+    #[serde(default)]
+    client_turn_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct UpdateTurnArgs {
+    /// Public turn id returned by begin_turn.
+    turn_id: String,
+    /// One of requested, started, progress, waiting_for_approval,
+    /// response_started, response_completed, failed, or cancelled.
+    status: String,
+    /// Final human-readable response when status is response_completed.
+    #[serde(default)]
+    response: Option<String>,
+    /// Failure or cancellation explanation.
+    #[serde(default)]
+    error: Option<String>,
+}
+
 #[tool_router]
 impl SidebarMcp {
     #[tool(description = "Returns the calling agent's registered name in sidebar.")]
@@ -146,6 +170,37 @@ impl SidebarMcp {
         self.call(Op::Inbox {
             wait_ms: args.wait_ms,
             mentions_only: args.mentions_only,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Claim one inbox message as a durable agent turn. Call this before working on a task, then call update_turn with response_completed and the final response when done."
+    )]
+    async fn begin_turn(&self, Parameters(args): Parameters<BeginTurnArgs>) -> String {
+        self.call(Op::BeginTurn {
+            message_id: args.message_id,
+            client_turn_id: args.client_turn_id,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Advance a turn lifecycle. Use started, progress, waiting_for_approval, response_started, response_completed, failed, or cancelled. response_completed posts the final response back to the source room/thread exactly once."
+    )]
+    async fn update_turn(&self, Parameters(args): Parameters<UpdateTurnArgs>) -> String {
+        let Some(status) = parse_turn_status(&args.status) else {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("unknown turn status `{}`", args.status)
+            })
+            .to_string();
+        };
+        self.call(Op::UpdateTurn {
+            turn_id: args.turn_id,
+            status,
+            response: args.response,
+            error: args.error,
         })
         .await
     }
@@ -352,7 +407,7 @@ Do these in one short message:\n\
 2. Call `mcp__sidebar__participants` to see who else is around.\n\
 3. Tell the user: who you are, who else is here, and that you're in per-turn mode (no scheduled polling).\n\
 \n\
-For every turn from now on, before doing anything else, call `mcp__sidebar__inbox` (no `wait_ms`). For messages addressed to you (DMs, or `@<your-name>` in a channel/broadcast), respond concisely. If empty, continue with whatever the user asked.";
+For every turn from now on, before doing anything else, call `mcp__sidebar__inbox` (no `wait_ms`). For each message addressed to you (DMs, or `@<your-name>` in a channel/broadcast), call `mcp__sidebar__begin_turn` with its message id, then do the work and call `mcp__sidebar__update_turn` with `status: response_completed` and your final response. This posts the response back to the source room/thread exactly once. If empty, continue with whatever the user asked.";
 
 fn render_sidebar_poll(human: &str, seconds: u64) -> String {
     format!(
@@ -365,7 +420,7 @@ If this is the first call (no prior `whoami` yet), do these in one short message
 \n\
 On every fire (including this one):\n\
 1. Call `mcp__sidebar__inbox` (no `wait_ms`).\n\
-2. For messages addressed to you (DMs or `@<your-name>` in channel/broadcast), respond concisely. Stay quiet on other channel chatter unless it changes something the user cares about.\n\
+2. For each message addressed to you (DMs or `@<your-name>` in channel/broadcast), call `mcp__sidebar__begin_turn` with its message id, do the work, then call `mcp__sidebar__update_turn` with `status: response_completed` and the final response. Stay quiet on other channel chatter unless it changes something the user cares about.\n\
 3. Call `ScheduleWakeup` with:\n\
    - `delaySeconds`: {seconds}\n\
    - `prompt`: `/mcp__sidebar__sidebar-poll {human}`\n\
@@ -390,7 +445,7 @@ If this is the first call (no prior `whoami` yet), do these in one short message
 Then enter the listen loop:\n\
 1. Call `mcp__sidebar__inbox` with `wait_ms`: {wait_ms}. The call blocks up to {human}.\n\
 2. When it returns:\n\
-   - For messages addressed to you (DMs, or `@<your-name>` in channel/broadcast), respond concisely. Stay quiet on other channel chatter unless it changes something the user cares about.\n\
+   - For each message addressed to you (DMs, or `@<your-name>` in channel/broadcast), call `mcp__sidebar__begin_turn` with its message id, do the work, then call `mcp__sidebar__update_turn` with `status: response_completed` and the final response. Stay quiet on other channel chatter unless it changes something the user cares about.\n\
    - If `messages` is empty (poll timed out), that's fine — just proceed.\n\
 3. Immediately call `mcp__sidebar__inbox` again with the same `wait_ms`. Repeat until either:\n\
    - The user tells you to stop (\"stop listening\", \"stop checking sidebar\", \"that's enough\").\n\
@@ -497,6 +552,10 @@ fn format_response_data(data: Option<&ResponseData>) -> serde_json::Value {
                 "error": "detailed history is not exposed to agents",
             })
         }
+        Some(ResponseData::Turn { turn }) => serde_json::json!({
+            "ok": true,
+            "turn": turn,
+        }),
         Some(ResponseData::Agents { agents }) => {
             serde_json::json!({ "ok": true, "agents": agents })
         }
@@ -528,6 +587,22 @@ fn format_response_data(data: Option<&ResponseData>) -> serde_json::Value {
 fn err_json(msg: &str) -> String {
     // Round-trip through serde to escape correctly; fallback is well-formed JSON.
     serde_json::json!({ "ok": false, "error": msg }).to_string()
+}
+
+fn parse_turn_status(status: &str) -> Option<TurnStatus> {
+    match status.trim() {
+        "created" => Some(TurnStatus::Created),
+        "delivered" => Some(TurnStatus::Delivered),
+        "requested" => Some(TurnStatus::Requested),
+        "started" => Some(TurnStatus::Started),
+        "progress" => Some(TurnStatus::Progress),
+        "waiting_for_approval" => Some(TurnStatus::WaitingForApproval),
+        "response_started" => Some(TurnStatus::ResponseStarted),
+        "response_completed" => Some(TurnStatus::ResponseCompleted),
+        "failed" => Some(TurnStatus::Failed),
+        "cancelled" => Some(TurnStatus::Cancelled),
+        _ => None,
+    }
 }
 
 fn format_message(m: &crate::types::Message) -> serde_json::Value {

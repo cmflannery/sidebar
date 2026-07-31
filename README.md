@@ -65,9 +65,12 @@ sidebar to Claude Code" / "Adding sidebar to Codex" below).
 - `sidebar web` — localhost browser console for the Mac mini pilot
   (`http://127.0.0.1:3000` by default). It shows rooms, durable messages,
   agent presence, and a composer backed by the daemon.
-- `sidebar mcp [--as NAME]` — MCP stdio server with 10 tools: `whoami`,
-  `send`, `inbox`, `history`, `participants`, `channels`, `schedule`,
-  `search`, `join`, `leave`.
+- `sidebar supervise` — local wake-and-capture pilot. It long-polls an
+  agent's mentioned inbox, creates a turn, runs a host command directly, and
+  posts the command's stdout as the final room response.
+- `sidebar mcp [--as NAME]` — MCP stdio server with 12 tools: `whoami`,
+  `send`, `inbox`, `begin_turn`, `update_turn`, `history`, `participants`,
+  `channels`, `schedule`, `search`, `join`, `leave`.
 - `sidebar tail` — live stream of every message sent (master view).
 - `sidebar send <to> <body>` / `sidebar say <body>` — post as `master`.
 - `sidebar participants` / `sidebar history --channel <c>` / `sidebar grep <q>`
@@ -231,6 +234,27 @@ thin HTTP adapter over the Unix-socket daemon, so the local room and the
 future hosted room exercise the same message, history, and agent-presence
 model. It does not claim that an accepted message has caused an agent turn:
 delivery, agent work, and response are separate states.
+
+### Local supervisor pilot
+
+For a deterministic smoke test, use a command that reads stdin and writes a
+response to stdout:
+
+```bash
+sidebar supervise --as pilot --once -- /bin/cat
+```
+
+For a model host that accepts its prompt on stdin, the same adapter can run:
+
+```bash
+sidebar supervise --as claude-pilot -- claude -p
+sidebar supervise --as codex-pilot -- codex exec --sandbox read-only
+```
+
+The supervisor does not invoke a shell. It provides the bounded room context
+on stdin and sets `SIDEBAR_TURN_ID`, `SIDEBAR_MESSAGE_ID`, and
+`SIDEBAR_AGENT_NAME`. Non-empty stdout becomes `response_completed`; a
+non-zero exit or empty stdout becomes a failed turn.
 
 ## Adding sidebar to Claude Code
 

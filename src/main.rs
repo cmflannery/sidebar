@@ -41,6 +41,25 @@ pub enum Command {
         as_name: Option<String>,
     },
 
+    /// Run a local supervisor that turns inbox messages into host commands.
+    /// The command is executed directly (no shell); its stdout becomes the
+    /// final response posted back to the source room/thread.
+    Supervise {
+        /// Agent identity to supervise.
+        #[arg(long = "as", default_value = "supervisor")]
+        as_name: String,
+        /// Long-poll wait per inbox call, capped by the daemon at 5 minutes.
+        #[arg(long, default_value_t = 300_000)]
+        wait_ms: u64,
+        /// Handle one inbox message and exit.
+        #[arg(long)]
+        once: bool,
+        /// Host command, followed by its arguments. Example:
+        /// `sidebar supervise --as claude-pilot --once -- claude -p`
+        #[arg(required = true, trailing_var_arg = true)]
+        command: Vec<String>,
+    },
+
     /// Stream messages live to terminal.
     Tail {
         #[arg(long)]

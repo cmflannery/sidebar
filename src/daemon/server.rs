@@ -189,7 +189,7 @@ async fn handle_conn(daemon: Arc<Daemon>, stream: UnixStream) -> Result<()> {
         return Ok(());
     }
 
-    let req_result = request_loop(&daemon, &agent_name, &mut reader, out_tx).await;
+    let req_result = request_loop(&daemon, &agent_name, session_id, &mut reader, out_tx).await;
 
     if let Some(sid) = session_id {
         if let Err(e) = daemon.store.close_session(sid).await {
@@ -225,6 +225,7 @@ async fn writer_task(mut write: OwnedWriteHalf, mut rx: mpsc::Receiver<Vec<u8>>)
 async fn request_loop(
     daemon: &Arc<Daemon>,
     agent_name: &str,
+    session_id: Option<i64>,
     reader: &mut tokio::io::Lines<BufReader<OwnedReadHalf>>,
     out_tx: mpsc::Sender<Vec<u8>>,
 ) -> Result<()> {
@@ -236,7 +237,7 @@ async fn request_loop(
         let (resp, subscribe_after) = match serde_json::from_str::<Request>(&line) {
             Ok(req) => {
                 let is_subscribe = matches!(req.op, Op::Subscribe);
-                let resp = dispatch(daemon, agent_name, req).await;
+                let resp = dispatch(daemon, agent_name, session_id, req).await;
                 let ok = resp.ok;
                 (resp, is_subscribe && ok)
             }
@@ -372,7 +373,12 @@ fn parse_id_best_effort(line: &str) -> u64 {
 }
 
 #[allow(clippy::too_many_lines)] // big match over all ops; splitting hurts readability more than it helps
-async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
+async fn dispatch(
+    daemon: &Daemon,
+    agent_name: &str,
+    session_id: Option<i64>,
+    req: Request,
+) -> Response {
     let id = req.id;
     let result: Result<ResponseData> = match req.op {
         Op::Participants => daemon
@@ -497,6 +503,55 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 .await
                 .map(|messages_detailed| ResponseData::MessagesDetailed { messages_detailed })
         }
+        Op::BeginTurn {
+            message_id,
+            client_turn_id,
+        } => {
+            if let Some(client_id) = client_turn_id.as_deref() {
+                if client_id.len() > 256 {
+                    return Response {
+                        id,
+                        ok: false,
+                        error: Some("client_turn_id must be 256 bytes or fewer".into()),
+                        data: None,
+                    };
+                }
+            }
+            daemon
+                .store
+                .begin_turn(agent_name, session_id, message_id, client_turn_id)
+                .await
+                .map(|turn| ResponseData::Turn { turn })
+        }
+        Op::UpdateTurn {
+            turn_id,
+            status,
+            response,
+            error,
+        } => match daemon
+            .store
+            .update_turn(agent_name, &turn_id, status, response, error)
+            .await
+        {
+            Ok(updated) => {
+                if let Some(message) = updated.response_message {
+                    let _ = daemon.events.send(Event::Message {
+                        to: message.to,
+                        from: message.from,
+                        body: message.body,
+                        message_id: message.message_id,
+                    });
+                }
+                Ok(ResponseData::Turn { turn: updated.turn })
+            }
+            Err(error) => Err(error),
+        },
+        Op::GetTurn { turn_id } => daemon
+            .store
+            .get_turn(&turn_id)
+            .await
+            .and_then(|turn| turn.context("turn not found"))
+            .map(|turn| ResponseData::Turn { turn }),
         Op::Subscribe => Ok(ResponseData::SendOk { message_id: 0 }),
         Op::Schedule { to, body, when } => {
             let recipient = Recipient::parse(&to);

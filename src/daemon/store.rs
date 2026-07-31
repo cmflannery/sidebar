@@ -69,6 +69,20 @@ pub struct DeliveredScheduled {
     pub body: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct TurnResponseMessage {
+    pub message_id: i64,
+    pub from: String,
+    pub to: Recipient,
+    pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TurnUpdateResult {
+    pub turn: crate::proto::TurnRecord,
+    pub response_message: Option<TurnResponseMessage>,
+}
+
 impl Store {
     /// Open (or create) the database at `path`, run schema, and seed the
     /// `master` agent if absent.
@@ -234,47 +248,8 @@ impl Store {
         tokio::task::spawn_blocking(move || -> Result<i64> {
             let mut conn = conn.blocking_lock();
             let tx = conn.transaction()?;
-
             let from_id = ensure_agent_blocking(&tx, &from_name)?;
-
-            let (to_agent, to_channel, is_broadcast) = match &to {
-                Recipient::Agent(name) => {
-                    let id = ensure_agent_blocking(&tx, name)?;
-                    (Some(id), None, false)
-                }
-                Recipient::Channel(name) => {
-                    let id = ensure_channel_blocking(&tx, name)?;
-                    (None, Some(id), false)
-                }
-                Recipient::Broadcast => (None, None, true),
-            };
-
-            let intent_str = intent.map(intent_to_str);
-
-            tx.execute(
-                "INSERT INTO messages (from_agent, to_agent, to_channel, is_broadcast, body, intent, reply_to, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![from_id, to_agent, to_channel, i64::from(is_broadcast), body, intent_str, reply_to, now],
-            )?;
-            let msg_id = tx.last_insert_rowid();
-
-            let recipient_ids = delivery_recipient_ids(
-                &tx,
-                from_id,
-                &to,
-                to_agent,
-                to_channel,
-                &body,
-            )?;
-
-            for aid in &recipient_ids {
-                tx.execute(
-                    "INSERT OR IGNORE INTO deliveries (message_id, agent_id, delivered_at)
-                     VALUES (?1, ?2, ?3)",
-                    params![msg_id, aid, now],
-                )?;
-            }
-
+            let msg_id = insert_message_tx(&tx, from_id, &to, &body, intent, reply_to, &now)?;
             tx.commit()?;
             Ok(msg_id)
         })
@@ -406,13 +381,205 @@ impl Store {
         let mut detailed = Vec::with_capacity(messages.len());
         for message in messages {
             if let Some(detail) = self.inspect_message(message.id).await? {
+                let turns = self.turns_for_message(message.id).await?;
                 detailed.push(crate::proto::MessageWithDelivery {
                     message: detail.message,
                     deliveries: detail.deliveries,
+                    turns,
                 });
             }
         }
         Ok(detailed)
+    }
+
+    /// Claim a delivered message as a turn for the connected agent. Reusing a
+    /// client turn id is idempotent; an already-active turn for the same
+    /// message is also returned instead of creating a duplicate.
+    pub async fn begin_turn(
+        &self,
+        agent_name: &str,
+        session_id: Option<i64>,
+        message_id: i64,
+        client_turn_id: Option<String>,
+    ) -> Result<crate::proto::TurnRecord> {
+        let conn = self.conn.clone();
+        let agent_name = agent_name.to_string();
+        tokio::task::spawn_blocking(move || -> Result<crate::proto::TurnRecord> {
+            let mut conn = conn.blocking_lock();
+            let tx = conn.transaction()?;
+            let agent_id = ensure_agent_blocking(&tx, &agent_name)?;
+
+            let addressed: Option<i64> = tx
+                .query_row(
+                    "SELECT 1 FROM deliveries WHERE message_id = ?1 AND agent_id = ?2",
+                    params![message_id, agent_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if addressed.is_none() {
+                anyhow::bail!(
+                    "message {message_id} was not delivered to agent `{agent_name}`"
+                );
+            }
+
+            if let Some(client_id) = client_turn_id.as_deref() {
+                if let Some(existing) = query_turn_by_client_id(&tx, agent_id, client_id)? {
+                    tx.commit()?;
+                    return Ok(existing);
+                }
+            }
+
+            if let Some(existing) = query_active_turn_for_message(&tx, agent_id, message_id)? {
+                tx.commit()?;
+                return Ok(existing);
+            }
+
+            let now = Utc::now().to_rfc3339();
+            let temporary_id = format!(
+                "turn-pending-{agent_id}-{message_id}-{}",
+                Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            );
+            tx.execute(
+                "INSERT INTO turns
+                 (turn_id, message_id, agent_id, session_id, client_turn_id, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                params![
+                    temporary_id,
+                    message_id,
+                    agent_id,
+                    session_id,
+                    client_turn_id,
+                    crate::proto::TurnStatus::Requested.as_str(),
+                    now
+                ],
+            )?;
+            let turn_row_id = tx.last_insert_rowid();
+            let turn_id = format!("turn-{turn_row_id}");
+            tx.execute(
+                "UPDATE turns SET turn_id = ?1 WHERE id = ?2",
+                params![turn_id, turn_row_id],
+            )?;
+            let turn = query_turn(&tx, &turn_id)?.context("turn disappeared after insert")?;
+            tx.commit()?;
+            Ok(turn)
+        })
+        .await?
+    }
+
+    /// Advance a turn. Completing a turn with a response atomically posts that
+    /// response back to the source room or DM thread exactly once.
+    pub async fn update_turn(
+        &self,
+        agent_name: &str,
+        turn_id: &str,
+        status: crate::proto::TurnStatus,
+        response: Option<String>,
+        error: Option<String>,
+    ) -> Result<TurnUpdateResult> {
+        let conn = self.conn.clone();
+        let agent_name = agent_name.to_string();
+        let turn_id = turn_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<TurnUpdateResult> {
+            let mut conn = conn.blocking_lock();
+            let tx = conn.transaction()?;
+            let agent_id = ensure_agent_blocking(&tx, &agent_name)?;
+            let current = query_turn(&tx, &turn_id)?.context("turn not found")?;
+            if current.agent != agent_name {
+                anyhow::bail!("turn `{turn_id}` belongs to another agent");
+            }
+            if current.status.is_terminal() {
+                if current.status == status {
+                    tx.commit()?;
+                    return Ok(TurnUpdateResult {
+                        turn: current,
+                        response_message: None,
+                    });
+                }
+                anyhow::bail!("turn `{turn_id}` is already terminal");
+            }
+            if status == crate::proto::TurnStatus::ResponseCompleted
+                && response.as_deref().is_none_or(str::is_empty)
+            {
+                anyhow::bail!("response_completed requires a non-empty response");
+            }
+
+            let now = Utc::now().to_rfc3339();
+            let mut response_message = None;
+            let mut response_message_id = current.response_message_id;
+            if status == crate::proto::TurnStatus::ResponseCompleted
+                && response_message_id.is_none()
+            {
+                let response_body = response.as_deref().unwrap_or_default();
+                if response_body.len() > 64 * 1024 {
+                    anyhow::bail!("response is too large; max is 65536 bytes");
+                }
+                let recipient = reply_recipient(&tx, current.message_id)?;
+                let message_id = insert_message_tx(
+                    &tx,
+                    agent_id,
+                    &recipient,
+                    response_body,
+                    None,
+                    Some(current.message_id),
+                    &now,
+                )?;
+                response_message_id = Some(message_id);
+                response_message = Some(TurnResponseMessage {
+                    message_id,
+                    from: agent_name.clone(),
+                    to: recipient,
+                    body: response_body.to_string(),
+                });
+            }
+
+            let completed_at = status.is_terminal().then_some(now.clone());
+            tx.execute(
+                "UPDATE turns
+                 SET status = ?1,
+                     response_body = COALESCE(?2, response_body),
+                     error = COALESCE(?3, error),
+                     updated_at = ?4,
+                     completed_at = COALESCE(?5, completed_at),
+                     response_message_id = COALESCE(?6, response_message_id)
+                 WHERE turn_id = ?7 AND agent_id = ?8",
+                params![
+                    status.as_str(),
+                    response,
+                    error,
+                    now,
+                    completed_at,
+                    response_message_id,
+                    turn_id,
+                    agent_id
+                ],
+            )?;
+            let turn = query_turn(&tx, &turn_id)?.context("turn disappeared after update")?;
+            tx.commit()?;
+            Ok(TurnUpdateResult {
+                turn,
+                response_message,
+            })
+        })
+        .await?
+    }
+
+    pub async fn get_turn(&self, turn_id: &str) -> Result<Option<crate::proto::TurnRecord>> {
+        let conn = self.conn.clone();
+        let turn_id = turn_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<crate::proto::TurnRecord>> {
+            let conn = conn.blocking_lock();
+            query_turn(&conn, &turn_id)
+        })
+        .await?
+    }
+
+    async fn turns_for_message(&self, message_id: i64) -> Result<Vec<crate::proto::TurnRecord>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<crate::proto::TurnRecord>> {
+            let conn = conn.blocking_lock();
+            query_turns_for_message(&conn, message_id)
+        })
+        .await?
     }
 
     /// History of DMs between two agents (oldest-first, capped).
@@ -961,6 +1128,216 @@ impl Store {
 }
 
 // ---- helpers (sync, run inside spawn_blocking) ----
+
+/// Insert a message and its delivery rows into an existing transaction.
+fn insert_message_tx(
+    tx: &rusqlite::Transaction<'_>,
+    from_id: i64,
+    to: &Recipient,
+    body: &str,
+    intent: Option<Intent>,
+    reply_to: Option<i64>,
+    created_at: &str,
+) -> Result<i64> {
+    let (to_agent, to_channel, is_broadcast) = match to {
+        Recipient::Agent(name) => {
+            let id = ensure_agent_blocking(tx, name)?;
+            (Some(id), None, false)
+        }
+        Recipient::Channel(name) => {
+            let id = ensure_channel_blocking(tx, name)?;
+            (None, Some(id), false)
+        }
+        Recipient::Broadcast => (None, None, true),
+    };
+
+    tx.execute(
+        "INSERT INTO messages (from_agent, to_agent, to_channel, is_broadcast, body, intent, reply_to, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            from_id,
+            to_agent,
+            to_channel,
+            i64::from(is_broadcast),
+            body,
+            intent.map(intent_to_str),
+            reply_to,
+            created_at
+        ],
+    )?;
+    let message_id = tx.last_insert_rowid();
+    let recipient_ids = delivery_recipient_ids(tx, from_id, to, to_agent, to_channel, body)?;
+    for agent_id in recipient_ids {
+        tx.execute(
+            "INSERT OR IGNORE INTO deliveries (message_id, agent_id, delivered_at)
+             VALUES (?1, ?2, ?3)",
+            params![message_id, agent_id, created_at],
+        )?;
+    }
+    Ok(message_id)
+}
+
+#[derive(Debug)]
+struct TurnDbRow {
+    turn_id: String,
+    message_id: i64,
+    agent: String,
+    status: String,
+    client_turn_id: Option<String>,
+    response: Option<String>,
+    error: Option<String>,
+    created_at: String,
+    updated_at: String,
+    completed_at: Option<String>,
+    response_message_id: Option<i64>,
+}
+
+impl TurnDbRow {
+    fn into_record(self) -> Result<crate::proto::TurnRecord> {
+        let status = match self.status.as_str() {
+            "created" => crate::proto::TurnStatus::Created,
+            "delivered" => crate::proto::TurnStatus::Delivered,
+            "requested" => crate::proto::TurnStatus::Requested,
+            "started" => crate::proto::TurnStatus::Started,
+            "progress" => crate::proto::TurnStatus::Progress,
+            "waiting_for_approval" => crate::proto::TurnStatus::WaitingForApproval,
+            "response_started" => crate::proto::TurnStatus::ResponseStarted,
+            "response_completed" => crate::proto::TurnStatus::ResponseCompleted,
+            "failed" => crate::proto::TurnStatus::Failed,
+            "cancelled" => crate::proto::TurnStatus::Cancelled,
+            other => anyhow::bail!("unknown turn status `{other}`"),
+        };
+        Ok(crate::proto::TurnRecord {
+            turn_id: self.turn_id,
+            message_id: self.message_id,
+            agent: self.agent,
+            status,
+            client_turn_id: self.client_turn_id,
+            response: self.response,
+            error: self.error,
+            created_at: parse_ts(&self.created_at),
+            updated_at: parse_ts(&self.updated_at),
+            completed_at: self.completed_at.as_deref().map(parse_ts),
+            response_message_id: self.response_message_id,
+        })
+    }
+}
+
+fn query_turn(conn: &Connection, turn_id: &str) -> Result<Option<crate::proto::TurnRecord>> {
+    let raw = conn
+        .query_row(
+            "SELECT t.turn_id, t.message_id, a.name, t.status, t.client_turn_id,
+                    t.response_body, t.error, t.created_at, t.updated_at,
+                    t.completed_at, t.response_message_id
+             FROM turns t
+             JOIN agents a ON a.id = t.agent_id
+             WHERE t.turn_id = ?1",
+            params![turn_id],
+            row_to_turn,
+        )
+        .optional()?;
+    raw.map(TurnDbRow::into_record).transpose()
+}
+
+fn query_turn_by_client_id(
+    tx: &rusqlite::Transaction<'_>,
+    agent_id: i64,
+    client_turn_id: &str,
+) -> Result<Option<crate::proto::TurnRecord>> {
+    let turn_id: Option<String> = tx
+        .query_row(
+            "SELECT turn_id FROM turns WHERE agent_id = ?1 AND client_turn_id = ?2",
+            params![agent_id, client_turn_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match turn_id {
+        Some(id) => query_turn(tx, &id),
+        None => Ok(None),
+    }
+}
+
+fn query_active_turn_for_message(
+    tx: &rusqlite::Transaction<'_>,
+    agent_id: i64,
+    message_id: i64,
+) -> Result<Option<crate::proto::TurnRecord>> {
+    let turn_id: Option<String> = tx
+        .query_row(
+            "SELECT turn_id FROM turns
+             WHERE agent_id = ?1 AND message_id = ?2
+               AND status NOT IN ('response_completed', 'failed', 'cancelled')
+             ORDER BY id DESC LIMIT 1",
+            params![agent_id, message_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match turn_id {
+        Some(id) => query_turn(tx, &id),
+        None => Ok(None),
+    }
+}
+
+fn query_turns_for_message(
+    conn: &Connection,
+    message_id: i64,
+) -> Result<Vec<crate::proto::TurnRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.turn_id, t.message_id, a.name, t.status, t.client_turn_id,
+                t.response_body, t.error, t.created_at, t.updated_at,
+                t.completed_at, t.response_message_id
+         FROM turns t
+         JOIN agents a ON a.id = t.agent_id
+         WHERE t.message_id = ?1
+         ORDER BY t.id ASC",
+    )?;
+    let raw = stmt
+        .query_map(params![message_id], row_to_turn)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    raw.into_iter()
+        .map(TurnDbRow::into_record)
+        .collect::<Result<Vec<_>>>()
+}
+
+fn row_to_turn(r: &rusqlite::Row<'_>) -> rusqlite::Result<TurnDbRow> {
+    Ok(TurnDbRow {
+        turn_id: r.get(0)?,
+        message_id: r.get(1)?,
+        agent: r.get(2)?,
+        status: r.get(3)?,
+        client_turn_id: r.get(4)?,
+        response: r.get(5)?,
+        error: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+        completed_at: r.get(9)?,
+        response_message_id: r.get(10)?,
+    })
+}
+
+fn reply_recipient(tx: &rusqlite::Transaction<'_>, message_id: i64) -> Result<Recipient> {
+    let (from, channel, agent, broadcast): (String, Option<String>, Option<String>, i64) = tx
+        .query_row(
+            "SELECT fa.name, tc.name, ta.name, m.is_broadcast
+             FROM messages m
+             JOIN agents fa ON fa.id = m.from_agent
+             LEFT JOIN channels tc ON tc.id = m.to_channel
+             LEFT JOIN agents ta ON ta.id = m.to_agent
+             WHERE m.id = ?1",
+            params![message_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .context("looking up source message for turn response")?;
+    if broadcast != 0 {
+        Ok(Recipient::Broadcast)
+    } else if let Some(channel) = channel {
+        Ok(Recipient::Channel(channel))
+    } else if agent.is_some() {
+        Ok(Recipient::Agent(from))
+    } else {
+        anyhow::bail!("source message {message_id} has no valid response recipient")
+    }
+}
 
 /// Resolve the delivery set for an immediate or scheduled message.
 ///
