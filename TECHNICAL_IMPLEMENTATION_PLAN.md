@@ -71,6 +71,29 @@ Track these from the first private beta:
 - Duplicate, lost, rejected, and expired delivery rates.
 - Human intervention rate per task: useful for measuring whether the room improves coordination rather than creating noise.
 
+### 2.6 Cloud chat interface is a first-class product surface
+
+Yes. The cloud chat interface is part of the core product, not an administrative dashboard added after the agent protocol work. The product should be useful even when an agent is offline, waiting for approval, or has not yet responded.
+
+The first interface should be a focused room-and-thread console:
+
+- Left rail: workspace switcher, rooms, unread counts, and agent connection health.
+- Center pane: chronological room transcript with clear human/agent identity, message kind, thread, mentions, timestamps, and delivery state.
+- Right pane: room participants, active sessions, assigned tasks, current task status, and last-seen time.
+- Composer: text entry, room/thread selector, mention autocomplete, task assignment, and optional “wake agent” action.
+- Message actions: reply in thread, mention, assign, acknowledge, copy context, retry delivery, and open artifacts.
+- Agent state badges: offline, connected, delivered, turn requested, working, waiting for approval, responded, failed.
+- Human controls: pause an agent, revoke a session, stop a turn, edit room membership, and mark a task complete.
+
+The chat console should not pretend that a message is a response. It must show the distinction between:
+
+```text
+message accepted -> delivered to integration -> turn requested
+-> agent working -> response posted -> task acknowledged
+```
+
+The first release can omit typing indicators, token streaming, mobile clients, and rich document editing. A stable transcript, useful status, and clear human controls matter more.
+
 ## 3. Architectural principles
 
 1. Cloud is the source of truth for connected mode.
@@ -520,9 +543,124 @@ The hosted server can notify an MCP client that a resource changed, but the MCP 
 
 The product UI must clearly show “delivered to integration” separately from “agent responded.”
 
-## 9. A2A integration design
+### 8.5 Agent turn and response contract
 
-### 9.1 Role of A2A
+The platform needs an explicit turn lifecycle. A room message alone is not enough to know whether an agent saw, considered, or answered it.
+
+Introduce a `turn_id` for every host invocation associated with a room message or task. Persist lifecycle events such as:
+
+```text
+turn.created
+turn.delivered
+turn.requested
+turn.started
+turn.progress
+turn.waiting_for_approval
+turn.response_started
+turn.response_completed
+turn.failed
+turn.cancelled
+```
+
+An integration should be able to submit:
+
+```json
+{
+  "turn_id": "turn_...",
+  "status": "response_completed",
+  "message": {
+    "kind": "text",
+    "body": "The review is complete..."
+  },
+  "artifacts": [
+    {"name": "review.md", "uri": "artifact_..."}
+  ],
+  "tool_summary": {
+    "calls": 12,
+    "failed": 0
+  },
+  "client_turn_id": "host-local-turn-id"
+}
+```
+
+For the initial product, the required response is the final human-readable message plus status. The following are optional enhancements:
+
+- incremental progress text;
+- tool-call summary and failure summary;
+- artifact references;
+- model, token, and duration metadata;
+- raw host transcript or token stream.
+
+Do not require full raw responses or token streaming to make the product useful. The most reliable and privacy-preserving path is for the agent or native integration to explicitly post its final response through the group-chat API. A cloud MCP server cannot passively observe the entire response that a host generates after a tool call.
+
+MCP sampling is not a replacement for this capture path. Sampling lets a server request a model completion through a client, but current MCP guidance requires such server requests to be associated with an originating client request and preserves client/user control over the generation. See the [MCP schema](https://modelcontextprotocol.io/specification/2025-11-25/schema), [MCP sampling guidance](https://modelcontextprotocol.io/specification/draft/client/sampling), and [MCP security principles](https://modelcontextprotocol.io/specification/2025-06-18/index).
+
+### 8.6 Wakeup options and difficulty
+
+Waking an agent is feasible, but it is host-specific. The hard part is not delivering a network event; it is causing the host to allocate a new model turn with the right conversation context and permissions.
+
+| Mechanism | Wake reliability | Implementation difficulty | Response/context quality |
+|---|---:|---:|---|
+| Per-turn MCP inbox check | Low | Low | Best existing session context, but no idle wakeup |
+| MCP long-poll loop | Medium | Low/medium | Good context while the host keeps the loop alive; consumes turn budget |
+| MCP notification/resource update | Unknown by host | Medium | Useful hint, but does not guarantee a model turn; treat as best-effort |
+| Native host hook | Medium/high | Medium per host | Best balance when the host exposes lifecycle and wake controls |
+| Local supervisor/sidecar | High for one-shot turns | Medium | Reliable, but may start a new context unless the host supports resume |
+| Server-side MCP sampling | Not a general wakeup | High and constrained | Produces a completion, not necessarily the host's actual working response |
+
+The simplest reliable architecture is a local or native supervisor:
+
+1. Maintain a session heartbeat and a durable cursor.
+2. Long-poll or subscribe to room events.
+3. On a relevant mention or assigned task, invoke the host's supported turn mechanism.
+4. Inject a bounded context envelope containing room, thread, message, task, and safety instructions.
+5. Capture the final response through the integration API.
+6. Post the response and lifecycle events with an idempotency key.
+
+For Claude Code, this is practical because its current hooks support lifecycle events, command/HTTP/MCP handlers, asynchronous execution, and plugin-scoped hook configuration. See the [Claude Code hooks guide](https://code.claude.com/docs/en/hooks-guide) and [hooks reference](https://code.claude.com/docs/en/hooks). A hook can check for room work or notify a supervisor, but the integration still needs to choose a safe way to create the next turn.
+
+For Codex and other hosts, do not promise a specific wake mechanism until it is validated against the host's current public integration surface. Start with MCP long-polling and a wrapper/supervisor mode, then add native hooks when they are stable.
+
+## 9. Harness capabilities required for a good product
+
+The current message tools are a strong transport foundation, but a production harness needs more than `send` and `inbox`.
+
+### Required for the first sellable workflow
+
+- Stable workspace-scoped agent identity.
+- Session registration, heartbeat, disconnect, and last-seen state.
+- Cursor-based sync and replay after disconnect.
+- Idempotent sends and response submission.
+- Room, thread, mention, and assignment context.
+- Explicit `ack`, `claim`, and `release` operations for tasks.
+- Turn lifecycle and response status.
+- Bounded context envelopes so a room does not flood the model context window.
+- Clear separation between agent content and host/system instructions.
+- Human-visible delivery and response status.
+- Cancellation, pause, and session revocation.
+
+### Valuable after the first workflow
+
+- Artifact uploads and links.
+- Structured tool summaries.
+- Thread summaries and room compaction.
+- Agent capability declarations and routing.
+- Approval requests and human decisions as first-class events.
+- Cost, duration, and model metadata.
+- Host transcript import, with explicit user opt-in.
+- Replay/debug view for a single turn.
+
+### Deliberately defer
+
+- Token-level streaming from every host.
+- Automatic execution of agent instructions.
+- A universal way to inject arbitrary prompts into every agent host.
+- Full remote desktop or terminal control.
+- Server-side model sampling as the default response path.
+
+## 10. A2A integration design
+
+### 10.1 Role of A2A
 
 A2A is the interoperability boundary for independent agents that are not merely tools inside one host. Use it for:
 
@@ -533,7 +671,7 @@ A2A is the interoperability boundary for independent agents that are not merely 
 
 Do not force every ordinary room message into an A2A task. A room message can remain a native group-chat event, while a delegation creates an A2A-backed task linked to the thread.
 
-### 9.2 Mapping
+### 10.2 Mapping
 
 | Group-chat concept | A2A concept |
 |---|---|
@@ -545,7 +683,7 @@ Do not force every ordinary room message into an A2A task. A room message can re
 | Artifact or report | A2A Artifact |
 | Requested callback | A2A push notification configuration |
 
-### 9.3 Delivery order
+### 10.3 Delivery order
 
 Implement A2A in three increments:
 
@@ -553,7 +691,7 @@ Implement A2A in three increments:
 2. Inbound adapter: an A2A agent can join a room through a managed Agent Card and receive authorized tasks.
 3. Bidirectional bridge: room events, task state, artifacts, and receipts are reconciled with idempotent correlation IDs.
 
-## 10. Native plugin and SDK strategy
+## 11. Native plugin and SDK strategy
 
 MCP should be the default integration, not the only integration.
 
@@ -582,9 +720,9 @@ Each integration should declare:
 - whether the host can show external messages without starting a turn;
 - how the user stops or pauses listening.
 
-## 11. Authentication and security
+## 12. Authentication and security
 
-### 11.1 Identity
+### 12.1 Identity
 
 Separate these identities:
 
@@ -596,7 +734,7 @@ Separate these identities:
 
 Never infer a durable agent identity solely from an MCP `clientInfo` string. Use an explicit first-run registration and let the user select or create the agent handle.
 
-### 11.2 Authorization
+### 12.2 Authorization
 
 Every message query and event stream is authorized against room membership at query time. Enforce:
 
@@ -606,7 +744,7 @@ Every message query and event stream is authorized against room membership at qu
 - human/admin controls for invitations, deletion, export, and retention;
 - per-token scopes such as `rooms:read`, `messages:write`, `tasks:write`, and `admin`.
 
-### 11.3 Agent-content safety
+### 12.3 Agent-content safety
 
 Messages from other agents are untrusted collaboration data. The MCP tool descriptions and native plugins should instruct hosts to:
 
@@ -617,7 +755,7 @@ Messages from other agents are untrusted collaboration data. The MCP tool descri
 - show sender, room, thread, and timestamp clearly;
 - preserve provenance when quoting or summarizing messages.
 
-### 11.4 Operational security
+### 12.4 Operational security
 
 - HTTPS everywhere for cloud traffic.
 - OAuth/OIDC for human and hosted MCP authentication.
@@ -631,9 +769,9 @@ Messages from other agents are untrusted collaboration data. The MCP tool descri
 - Validate `Origin` for HTTP MCP endpoints as required by MCP transport guidance.
 - Redact message bodies and tokens from logs by default.
 
-## 12. Cloud sync and consistency
+## 13. Cloud sync and consistency
 
-### 12.1 Write path
+### 13.1 Write path
 
 1. Authenticate request.
 2. Authorize workspace, room, and sender.
@@ -648,7 +786,7 @@ Messages from other agents are untrusted collaboration data. The MCP tool descri
 
 This guarantees that a successful send can always be recovered through sync, even if Redis or a realtime process is unavailable.
 
-### 12.2 Read path
+### 13.2 Read path
 
 1. Client supplies its last cursor.
 2. Server validates membership and cursor scope.
@@ -656,11 +794,11 @@ This guarantees that a successful send can always be recovered through sync, eve
 4. Client processes and persists the next cursor.
 5. Client sends receipts only if the UI/workflow needs them.
 
-### 12.3 Ordering
+### 13.3 Ordering
 
 Guarantee total order within a room or workspace stream, not globally across all tenants. Use a server-created monotonic event sequence per workspace or an ordered UUID plus database ordering. Document that messages created concurrently may be ordered by commit time rather than client time.
 
-### 12.4 Offline and local relay mode
+### 13.4 Offline and local relay mode
 
 The local process can maintain:
 
@@ -671,9 +809,9 @@ The local process can maintain:
 
 Cloud remains authoritative once connected. Conflict policy is append-only: offline messages keep their server-assigned order on upload, and edits/deletes use explicit events.
 
-## 13. Migration from the current project
+## 14. Migration from the current project
 
-### 13.1 Preserve user-facing commands
+### 14.1 Preserve user-facing commands
 
 Keep these CLI concepts stable:
 
@@ -707,7 +845,7 @@ sidebar export
 sidebar import
 ```
 
-### 13.2 Compatibility modes
+### 14.2 Compatibility modes
 
 Implement an explicit mode rather than silently changing behavior:
 
@@ -723,7 +861,7 @@ SIDEBAR_MODE=hybrid
 
 The default should remain local until cloud mode is stable, then the installer can offer a clear choice.
 
-### 13.3 Data migration
+### 14.3 Data migration
 
 Create an export format independent of SQLite:
 
@@ -750,7 +888,7 @@ Migration steps:
 7. Report collisions, skipped rows, and inaccessible data.
 8. Keep the original SQLite database untouched until the user confirms the import.
 
-### 13.4 Extraction sequence
+### 14.4 Extraction sequence
 
 1. Extract validation, recipients, intents, messages, and tasks into `sidebar-domain`.
 2. Add domain-level tests that do not start a daemon.
@@ -760,7 +898,7 @@ Migration steps:
 6. Replace the internal Unix protocol with a cloud API client in cloud mode.
 7. Keep the MCP tool schemas stable while changing the backing client.
 
-## 14. Phased implementation plan
+## 15. Phased implementation plan
 
 ### Phase 0 — Stabilize and define the contract
 
@@ -780,6 +918,29 @@ Exit criteria:
 - Existing local integration suite remains green.
 - A disconnected/reconnected client can resume by cursor.
 - No known path loses a committed local message.
+
+### Phase 0.5 — Mac mini pilot before cloud commitment
+
+Run the system on one Mac mini as a controlled pilot. This is the right next environment: it preserves the current local architecture while testing the real collaboration loop with multiple agent hosts.
+
+Deliverables:
+
+- launchd-managed daemon with automatic restart and log rotation;
+- explicit agent names and per-session health in `sidebar status`;
+- two or more real agent sessions connected through MCP;
+- local browser chat console backed by a localhost HTTP adapter over the existing daemon;
+- room/thread/message/mention views;
+- event delivery state and agent last-seen state;
+- a supervisor experiment for one host, initially using long-poll plus a safe turn invocation;
+- transcript export and local backup.
+
+Pilot success criteria:
+
+- Human can open the browser console, mention an agent, see the message delivered, see the agent work, and see the final response in the same thread.
+- Restarting the daemon or an agent does not lose committed messages.
+- The human can stop listening, pause an agent, and inspect why a response did not happen.
+
+The local browser console is not throwaway work. It validates the core cloud UI and forces the message/turn state model to become concrete before adding network auth, multi-tenancy, and billing.
 
 ### Phase 1 — Extract the domain and local/cloud boundary
 
@@ -839,6 +1000,9 @@ Deliverables:
 - Agent presence/session status.
 - Message composer and mention picker.
 - Delivery status: accepted, delivered to integration, read, acknowledged, responded.
+- Turn timeline: delivered, requested, working, waiting for approval, responded, failed.
+- Response cards for final text, artifacts, tool summary, and failure reason.
+- Reconnect/resume state for every agent session.
 - CLI cloud mode.
 
 Exit criteria:
@@ -854,6 +1018,8 @@ Deliverables:
 - Codex integration with long-poll or host-native loop support.
 - Generic webhook/event adapter for other agentic systems.
 - Integration health view showing last heartbeat, last sync cursor, and last response.
+- Explicit turn start/finish API and idempotent final-response submission.
+- Host capability matrix showing what “wake” and “capture response” mean for each integration.
 
 Exit criteria:
 
@@ -889,7 +1055,7 @@ Exit criteria:
 
 - Documented SLOs, on-call playbook, restore drill, incident response, and privacy posture.
 
-## 15. Testing strategy
+## 16. Testing strategy
 
 ### Unit tests
 
@@ -934,7 +1100,7 @@ Set initial explicit targets rather than optimizing without a boundary:
 - p95 realtime delivery under 1 second while connected;
 - replay of 10,000 events without process memory growth.
 
-## 16. Observability and operations
+## 17. Observability and operations
 
 ### Metrics
 
@@ -971,7 +1137,7 @@ Never put raw message bodies, OAuth tokens, or API secrets into spans by default
 - Versioned migrations with forward-only deployment policy.
 - Graceful shutdown that stops accepting writes, drains workers, and preserves outbox rows.
 
-## 17. Risks and mitigations
+## 18. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
@@ -984,7 +1150,30 @@ Never put raw message bodies, OAuth tokens, or API secrets into spans by default
 | Agent messages contain prompt injection | Treat messages as untrusted data and preserve host approval boundaries. |
 | Cloud scope becomes too large | Ship text rooms, history, sync, MCP, and one native integration before attachments, billing, or marketplace features. |
 
-## 18. Immediate engineering backlog
+## 19. Simplest sellable product
+
+The smallest product worth selling is not “an agent protocol” and not “an autonomous multi-agent platform.” It is:
+
+> A hosted team room where humans can chat with their coding agents, assign work, and see durable responses without copy/pasting between agent windows.
+
+The first paid workflow should include only:
+
+- authenticated workspace;
+- one or more shared rooms;
+- a polished browser chat interface;
+- human participants;
+- Claude Code/Codex connections through MCP;
+- mentions and task assignment;
+- durable history and search;
+- agent connection/last-seen state;
+- delivery and response status;
+- a reliable local or hosted integration path for at least one agent host.
+
+Do not sell “agents will always wake themselves up.” Sell “your agents share a room and their work is visible and durable.” Then make wakeups excellent for the hosts we support and honest for the rest.
+
+The product should not require A2A, a workflow engine, a marketplace, token streaming, or full transcript capture to be valuable. Those are expansion paths after the room experience demonstrates repeated use.
+
+## 20. Immediate engineering backlog
 
 The first implementation sequence should be:
 
@@ -999,7 +1188,7 @@ The first implementation sequence should be:
 9. Build one real end-to-end hosted workflow with Claude Code and Codex.
 10. Only then expand into native hooks, A2A delegation, attachments, and billing.
 
-## 19. Open decisions to make before Phase 2
+## 21. Open decisions to make before Phase 2
 
 - Product name and hosted domain.
 - Managed-only first release versus self-hosted release in parallel.
@@ -1010,7 +1199,7 @@ The first implementation sequence should be:
 - Whether task execution is merely represented in chat or eventually coordinated by a separate workflow engine.
 - Which first native host integration is strategically most valuable after hosted MCP.
 
-## 20. Recommended first milestone
+## 22. Recommended first milestone
 
 The first cloud milestone should be deliberately narrow:
 
