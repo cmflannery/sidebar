@@ -67,6 +67,12 @@ pub enum Op {
         #[serde(default = "default_limit")]
         limit: usize,
     },
+    /// Channel history with per-recipient delivery state for operator/UI use.
+    HistoryDetailed {
+        channel: String,
+        #[serde(default = "default_limit")]
+        limit: usize,
+    },
     Schedule {
         to: String,
         body: String,
@@ -168,6 +174,9 @@ pub enum ResponseData {
     Messages {
         messages: Vec<Message>,
     },
+    MessagesDetailed {
+        messages_detailed: Vec<MessageWithDelivery>,
+    },
     Agents {
         agents: Vec<String>,
     },
@@ -194,6 +203,12 @@ pub struct MessageDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageWithDelivery {
+    pub message: Message,
+    pub deliveries: Vec<MessageDelivery>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageDelivery {
     pub agent: String,
     pub delivered_at: Option<DateTime<Utc>>,
@@ -215,6 +230,7 @@ pub struct AgentDetails {
     pub name: String,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
+    pub active_sessions: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

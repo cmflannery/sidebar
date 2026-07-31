@@ -128,6 +128,15 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
 }
 
 async fn route(request: HttpRequest) -> HttpResponse {
+    if request.method == "GET" {
+        if let Some(message_id) = request
+            .path
+            .strip_prefix("/api/messages/")
+            .and_then(|value| value.parse::<i64>().ok())
+        {
+            return daemon_json(Op::Inspect { message_id }).await;
+        }
+    }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => HttpResponse::html(APP_HTML),
         ("GET", "/healthz") => HttpResponse::text("ok\n"),
@@ -150,12 +159,17 @@ async fn history_response(query: &str) -> HttpResponse {
     let limit = query_param(query, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100);
-    daemon_json(Op::History {
-        channel: Some(channel),
-        with: None,
-        limit,
-    })
-    .await
+    let include_delivery = query_param(query, "include_delivery").as_deref() == Some("1");
+    if include_delivery {
+        daemon_json(Op::HistoryDetailed { channel, limit }).await
+    } else {
+        daemon_json(Op::History {
+            channel: Some(channel),
+            with: None,
+            limit,
+        })
+        .await
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -443,7 +457,7 @@ const APP_HTML: &str = r#"<!doctype html>
     </aside>
   </div>
   <script>
-    const state = { channel: 'general', messages: [], agents: [], channels: [], loading: false };
+    const state = { channel: 'general', messages: [], agents: [], channels: [], delivery: {}, loading: false };
     const $ = (id) => document.getElementById(id);
     const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     const initials = (name) => name.slice(0, 2).toUpperCase();
@@ -451,9 +465,9 @@ const APP_HTML: &str = r#"<!doctype html>
     const setConnection = (ok, text) => { $('connection-dot').className = 'dot ' + (ok ? 'online' : ''); $('connection-text').textContent = text; $('daemon-status').textContent = text; };
     async function api(path, options) { const response = await fetch(path, options); const value = await response.json(); if (!response.ok || value.ok === false) throw new Error(value.error || 'request failed'); return value; }
     function renderChannels() { $('channels').innerHTML = state.channels.map((channel) => `<button class="nav-item ${channel.name === state.channel ? 'active' : ''}" data-channel="${escapeHtml(channel.name)}"><span>#${escapeHtml(channel.name)}</span><span class="count">${channel.member_count}</span></button>`).join(''); document.querySelectorAll('[data-channel]').forEach((button) => button.addEventListener('click', () => { state.channel = button.dataset.channel; $('room-name').textContent = state.channel; renderChannels(); loadMessages(); })); }
-    function renderAgents() { $('agents').innerHTML = state.agents.map((agent) => { const age = Date.now() - new Date(agent.last_seen).getTime(); const kind = age < 120000 ? 'online' : age < 3600000 ? 'recent' : ''; return `<div class="agent"><span class="dot ${kind}"></span><span class="agent-name">${escapeHtml(agent.name)}</span></div>`; }).join('') || '<div class="pilot">No agents connected yet.</div>'; }
-    function renderMessages() { $('message-count').textContent = state.messages.length; if (!state.messages.length) { $('messages').innerHTML = '<div class="empty"><strong>Start the room</strong>Mention an agent or send the first message.</div>'; return; } $('messages').innerHTML = state.messages.map((message) => { const intent = message.intent ? `<span class="tag">${escapeHtml(message.intent)}</span>` : ''; return `<article class="message"><div class="avatar">${escapeHtml(initials(message.from))}</div><div><div class="message-head"><span class="sender">${escapeHtml(message.from)}</span><span class="time">${relative(message.created_at)}</span></div><div class="message-body">${escapeHtml(message.body)}</div><div class="message-meta">${intent}<span>accepted · #${escapeHtml(state.channel)}</span></div></div></article>`; }).join(''); const node = $('messages'); node.scrollTop = node.scrollHeight; }
-    async function loadMessages() { try { const result = await api('/api/messages?channel=' + encodeURIComponent(state.channel) + '&limit=100'); state.messages = result.data.messages || []; renderMessages(); setConnection(true, 'Connected'); } catch (error) { setConnection(false, 'Daemon offline'); } }
+    function renderAgents() { $('agents').innerHTML = state.agents.map((agent) => { const age = Date.now() - new Date(agent.last_seen).getTime(); const kind = agent.active_sessions > 0 ? 'online' : age < 3600000 ? 'recent' : ''; const label = agent.active_sessions > 0 ? 'connected' : age < 3600000 ? 'recently seen' : 'offline'; return `<div class="agent" title="${label}"><span class="dot ${kind}"></span><span class="agent-name">${escapeHtml(agent.name)}</span></div>`; }).join('') || '<div class="pilot">No agents connected yet.</div>'; }
+    function renderMessages() { $('message-count').textContent = state.messages.length; if (!state.messages.length) { $('messages').innerHTML = '<div class="empty"><strong>Start the room</strong>Mention an agent or send the first message.</div>'; return; } $('messages').innerHTML = state.messages.map((message) => { const intent = message.intent ? `<span class="tag">${escapeHtml(message.intent)}</span>` : ''; const status = state.delivery[message.id] || (message.from === 'master' ? 'accepted' : 'response posted'); return `<article class="message"><div class="avatar">${escapeHtml(initials(message.from))}</div><div><div class="message-head"><span class="sender">${escapeHtml(message.from)}</span><span class="time">${relative(message.created_at)}</span></div><div class="message-body">${escapeHtml(message.body)}</div><div class="message-meta">${intent}<span>${escapeHtml(status)} · #${escapeHtml(state.channel)}</span></div></div></article>`; }).join(''); const node = $('messages'); node.scrollTop = node.scrollHeight; }
+    async function loadMessages() { try { const result = await api('/api/messages?channel=' + encodeURIComponent(state.channel) + '&limit=100&include_delivery=1'); const detailed = result.data.messages_detailed || []; state.messages = detailed.map((row) => row.message); state.delivery = {}; detailed.forEach((row) => { const deliveries = row.deliveries || []; const delivered = deliveries.filter((delivery) => delivery.delivered_at).length; const read = deliveries.filter((delivery) => delivery.read_at).length; state.delivery[row.message.id] = delivered ? `delivered to ${delivered}/${deliveries.length}` + (read ? ` · read by ${read}` : '') : 'accepted'; }); renderMessages(); setConnection(true, 'Connected'); } catch (error) { setConnection(false, 'Daemon offline'); } }
     async function loadSidebar() { try { const [status, channels, agents] = await Promise.all([api('/api/status'), api('/api/channels'), api('/api/agents')]); state.channels = channels.data.channels_detailed || []; state.agents = agents.data.agents_detailed || []; if (!state.channels.some((channel) => channel.name === state.channel) && state.channels.length) state.channel = state.channels[0].name; $('room-name').textContent = state.channel; $('daemon-status').textContent = status.data.paused ? 'Paused' : 'Running'; renderChannels(); renderAgents(); setConnection(true, 'Connected'); } catch (error) { setConnection(false, 'Daemon offline'); } }
     $('composer').addEventListener('submit', async (event) => { event.preventDefault(); if (state.loading) return; const body = $('body').value.trim(); if (!body) return; state.loading = true; document.querySelector('.send').disabled = true; try { const intent = $('intent').value || null; await api('/api/messages', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({to:'#' + state.channel, body, intent}) }); $('body').value = ''; $('intent').value = ''; await loadMessages(); } catch (error) { setConnection(false, error.message); } finally { state.loading = false; document.querySelector('.send').disabled = false; } });
     $('refresh').addEventListener('click', () => { loadSidebar(); loadMessages(); });

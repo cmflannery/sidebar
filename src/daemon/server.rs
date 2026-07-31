@@ -482,6 +482,21 @@ async fn dispatch(daemon: &Daemon, agent_name: &str, req: Request) -> Response {
                 (None, None) => Err(anyhow::anyhow!("history requires --channel or --with")),
             }
         }
+        Op::HistoryDetailed { channel, limit } => {
+            if limit > MAX_QUERY_LIMIT {
+                return Response {
+                    id,
+                    ok: false,
+                    error: Some(format!("limit {limit} exceeds max of {MAX_QUERY_LIMIT}")),
+                    data: None,
+                };
+            }
+            daemon
+                .store
+                .history_channel_detailed(&channel, limit)
+                .await
+                .map(|messages_detailed| ResponseData::MessagesDetailed { messages_detailed })
+        }
         Op::Subscribe => Ok(ResponseData::SendOk { message_id: 0 }),
         Op::Schedule { to, body, when } => {
             let recipient = Recipient::parse(&to);

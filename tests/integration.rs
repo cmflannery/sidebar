@@ -1235,6 +1235,56 @@ fn two_mcp_stubs_can_exchange_messages() {
     );
 }
 
+#[test]
+fn agents_json_reports_active_mcp_sessions() {
+    let sb = Sandbox::new();
+    let mut child = Command::new(sidebar_bin())
+        .args(["mcp", "--as", "presence-agent"])
+        .env("SIDEBAR_HOME", &sb.home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mcp stub");
+    let mut stdin = child.stdin.take().expect("mcp stdin");
+    let stdout = child.stdout.take().expect("mcp stdout");
+    let mut reader = BufReader::new(stdout);
+
+    let initialize = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"presence-test","version":"0.1"}}}"#,
+    );
+    assert!(
+        initialize.contains("serverInfo"),
+        "MCP initialize failed: {initialize}"
+    );
+    stdin
+        .write_all(
+            br#"{"jsonrpc":"2.0","method":"notifications/initialized"}
+"#,
+        )
+        .expect("write initialized notification");
+    let whoami = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#,
+    );
+    assert!(whoami.contains("presence-agent"), "whoami failed: {whoami}");
+
+    let agents: serde_json::Value =
+        serde_json::from_str(&sb.stdout(&["agents", "--all", "--json"])).expect("agents JSON");
+    let presence = agents
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["name"] == "presence-agent"))
+        .expect("presence agent row");
+    assert_eq!(presence["active_sessions"], 1);
+
+    drop(stdin);
+    drop(reader);
+    child.wait().expect("wait mcp stub");
+}
+
 /// Two concurrent MCP stubs requesting `--as claude-code` should get
 /// distinct names (`claude-code` and `claude-code-2`).
 #[test]

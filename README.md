@@ -100,7 +100,7 @@ sidebar status --json       # machine-readable
 
 sidebar agents              # active agents with last_seen, e.g. "claude-code  3m ago"
 sidebar agents --all        # include agents not seen in the last 7 days
-sidebar agents --json       # JSON array of {name, first_seen, last_seen}
+sidebar agents --json       # JSON array of {name, first_seen, last_seen, active_sessions}
 ```
 
 When the daemon is down, `status` prints a friendly hint instead of

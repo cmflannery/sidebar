@@ -489,6 +489,14 @@ fn format_response_data(data: Option<&ResponseData>) -> serde_json::Value {
             "ok": true,
             "messages": messages.iter().map(format_message).collect::<Vec<_>>()
         }),
+        Some(ResponseData::MessagesDetailed { .. }) => {
+            // Delivery detail is an operator/UI concern; MCP agents should
+            // not surveil every recipient's read state.
+            serde_json::json!({
+                "ok": false,
+                "error": "detailed history is not exposed to agents",
+            })
+        }
         Some(ResponseData::Agents { agents }) => {
             serde_json::json!({ "ok": true, "agents": agents })
         }

@@ -115,13 +115,19 @@ impl Store {
             let conn = conn.blocking_lock();
             let (sql, params): (&str, Vec<&dyn rusqlite::ToSql>) = if include_stale {
                 (
-                    "SELECT name, first_seen, last_seen FROM agents ORDER BY last_seen DESC",
+                    "SELECT a.name, a.first_seen, a.last_seen,
+                            (SELECT COUNT(*) FROM sessions s
+                             WHERE s.agent_id = a.id AND s.ended_at IS NULL)
+                     FROM agents a ORDER BY a.last_seen DESC",
                     vec![],
                 )
             } else {
                 (
-                    "SELECT name, first_seen, last_seen FROM agents
-                     WHERE last_seen >= ?1 ORDER BY last_seen DESC",
+                    "SELECT a.name, a.first_seen, a.last_seen,
+                            (SELECT COUNT(*) FROM sessions s
+                             WHERE s.agent_id = a.id AND s.ended_at IS NULL)
+                     FROM agents a
+                     WHERE a.last_seen >= ?1 ORDER BY a.last_seen DESC",
                     vec![&cutoff],
                 )
             };
@@ -132,6 +138,7 @@ impl Store {
                         name: r.get(0)?,
                         first_seen: parse_ts(&r.get::<_, String>(1)?),
                         last_seen: parse_ts(&r.get::<_, String>(2)?),
+                        active_sessions: r.get(3)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -385,6 +392,27 @@ impl Store {
             Ok(rows)
         })
         .await?
+    }
+
+    /// Channel history plus delivery receipts, oldest-first. This is used by
+    /// the local operator console; MCP agents should use the lighter history
+    /// operation unless they explicitly need receipt state.
+    pub async fn history_channel_detailed(
+        &self,
+        channel_name: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::proto::MessageWithDelivery>> {
+        let messages = self.history_channel(channel_name, limit).await?;
+        let mut detailed = Vec::with_capacity(messages.len());
+        for message in messages {
+            if let Some(detail) = self.inspect_message(message.id).await? {
+                detailed.push(crate::proto::MessageWithDelivery {
+                    message: detail.message,
+                    deliveries: detail.deliveries,
+                });
+            }
+        }
+        Ok(detailed)
     }
 
     /// History of DMs between two agents (oldest-first, capped).
