@@ -26,7 +26,7 @@ use crate::types::Recipient;
 
 #[derive(Clone)]
 struct SidebarMcp {
-    agent_name: String,
+    agent_name: Arc<Mutex<String>>,
     /// Lazy connection. `None` means "not yet connected" or "previously dropped
     /// after a failure". Each tool call re-establishes if needed; this lets
     /// the stub survive a daemon restart instead of dying on stdin EOF.
@@ -124,7 +124,7 @@ struct ScheduleArgs {
 impl SidebarMcp {
     #[tool(description = "Returns the calling agent's registered name in sidebar.")]
     async fn whoami(&self) -> String {
-        self.agent_name.clone()
+        self.agent_name.lock().await.clone()
     }
 
     #[tool(description = "Send a message. `to` is `@agent`, `#channel`, or `*` for broadcast.")]
@@ -450,17 +450,28 @@ impl SidebarMcp {
             // Reconnecting after a drop — we want the daemon to assign us
             // the same name we held before if it's free, so pass our
             // current `agent_name` (which may itself be a suffixed form).
-            let client = Client::connect_mcp(&self.agent_name, env!("CARGO_PKG_VERSION"))
+            let requested_name = self.agent_name.lock().await.clone();
+            let client = Client::connect_mcp(&requested_name, env!("CARGO_PKG_VERSION"))
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!(
                         "sidebar daemon not reachable: {e}. Start it with `sidebar serve`."
                     )
                 })?;
+            *self.agent_name.lock().await = client.assigned_name().to_string();
             *guard = Some(client);
         }
         let client = guard.as_mut().expect("connected above");
-        let resp = client.request(op).await?;
+        let resp = match client.request(op).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                // The daemon may have restarted or the socket may have been
+                // closed while this request was in flight. Drop the stale
+                // client so the next tool call establishes a fresh session.
+                *guard = None;
+                return Err(e);
+            }
+        };
         if !resp.ok {
             anyhow::bail!(resp.error.unwrap_or_else(|| "unknown daemon error".into()));
         }
@@ -564,7 +575,7 @@ pub async fn serve(requested_name: String) -> Result<()> {
             }
         };
     let server = SidebarMcp {
-        agent_name,
+        agent_name: Arc::new(Mutex::new(agent_name)),
         client: Arc::new(Mutex::new(client)),
         prompt_router: SidebarMcp::prompt_router(),
     };

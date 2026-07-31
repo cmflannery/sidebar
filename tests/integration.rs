@@ -3,7 +3,7 @@
 //! Each test gets its own SIDEBAR_HOME tmpdir; the daemon is spawned as a
 //! subprocess and torn down at the end of the test.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -715,6 +715,30 @@ fn channel_mention_pings_nonmember() {
 }
 
 #[test]
+fn scheduled_channel_mention_pings_nonmember() {
+    let sb = Sandbox::new();
+    sb.stdout(&["send", "@bob", "create bob"]);
+    sb.stdout(&["inbox", "--as", "bob"]); // drain
+    sb.stdout(&["join", "standup", "--as", "alice"]);
+
+    sb.stdout(&[
+        "schedule",
+        "--as",
+        "alice",
+        "--to",
+        "#standup",
+        "--in",
+        "1",
+        "scheduled ping @bob",
+    ]);
+    let inbox = sb.stdout(&["inbox", "--as", "bob", "--wait-ms", "3000"]);
+    assert!(
+        inbox.contains("scheduled ping @bob"),
+        "scheduled @-mention didn't ping non-member: {inbox}"
+    );
+}
+
+#[test]
 fn dm_mention_does_not_create_extra_deliveries() {
     let sb = Sandbox::new();
     sb.stdout(&["send", "@bob", "create bob"]);
@@ -989,6 +1013,33 @@ fn schedule_in_delivers_after_the_delay() {
     assert!(
         elapsed < Duration::from_secs(3),
         "delivered too late ({elapsed:?})"
+    );
+}
+
+#[test]
+fn self_scheduled_message_wakes_long_poll() {
+    let sb = Sandbox::new();
+    sb.stdout(&[
+        "schedule",
+        "--as",
+        "alice",
+        "--to",
+        "@alice",
+        "--in",
+        "1",
+        "self-reminder",
+    ]);
+
+    let start = Instant::now();
+    let out = sb.stdout(&["inbox", "--as", "alice", "--wait-ms", "3000"]);
+    let elapsed = start.elapsed();
+    assert!(
+        out.contains("self-reminder"),
+        "self-message was not returned: {out}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "self-message did not wake the long-poll promptly: {elapsed:?}"
     );
 }
 
@@ -1297,6 +1348,106 @@ fn run_mcp_stub(home: &std::path::Path, agent: &str, handshake: &str) -> String 
     drop(child.stdin.take());
     let out = child.wait_with_output().expect("wait mcp stub");
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn mcp_exchange<W: Write, R: BufRead>(stdin: &mut W, reader: &mut R, request: &str) -> String {
+    writeln!(stdin, "{request}").expect("write MCP request");
+    let mut response = String::new();
+    reader.read_line(&mut response).expect("read MCP response");
+    response
+}
+
+#[test]
+fn mcp_stub_reconnects_after_daemon_restart() {
+    let mut sb = Sandbox::new();
+    let mut child = Command::new(sidebar_bin())
+        .args(["mcp", "--as", "alice"])
+        .env("SIDEBAR_HOME", &sb.home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mcp stub");
+    let mut stdin = child.stdin.take().expect("mcp stdin");
+    let stdout = child.stdout.take().expect("mcp stdout");
+    let mut reader = BufReader::new(stdout);
+
+    let initialize = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"restart-test","version":"0.1"}}}"#,
+    );
+    assert!(
+        initialize.contains("serverInfo"),
+        "MCP initialize failed: {initialize}"
+    );
+    stdin
+        .write_all(br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .expect("write initialized notification");
+    stdin
+        .write_all(b"\n")
+        .expect("terminate initialized notification");
+    let before = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"participants","arguments":{}}}"#,
+    );
+    assert!(
+        before.contains("alice"),
+        "initial MCP call failed: {before}"
+    );
+
+    sb.daemon.kill().expect("kill first daemon");
+    sb.daemon.wait().expect("wait first daemon");
+
+    // The first call after the restart should surface the broken connection
+    // but also clear it, so the next call can reconnect.
+    let broken = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"participants","arguments":{}}}"#,
+    );
+    assert!(
+        broken.contains("Broken pipe") || broken.contains("daemon closed"),
+        "expected stale-connection error, got: {broken}"
+    );
+
+    #[allow(clippy::zombie_processes)]
+    let mut daemon2 = Command::new(sidebar_bin())
+        .arg("serve")
+        .env("SIDEBAR_HOME", &sb.home)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn replacement daemon");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let probe = Command::new(sidebar_bin())
+            .arg("participants")
+            .env("SIDEBAR_HOME", &sb.home)
+            .output()
+            .expect("probe replacement daemon");
+        if probe.status.success() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let after = mcp_exchange(
+        &mut stdin,
+        &mut reader,
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"participants","arguments":{}}}"#,
+    );
+    assert!(
+        after.contains("agents") && after.contains("alice") && !after.contains("Broken pipe"),
+        "MCP stub did not reconnect: {after}"
+    );
+
+    drop(stdin);
+    drop(reader);
+    child.wait().expect("wait mcp stub");
+    daemon2.kill().expect("kill replacement daemon");
+    daemon2.wait().expect("wait replacement daemon");
 }
 
 /// Regression: the MCP stub must start cleanly even when the daemon is down.

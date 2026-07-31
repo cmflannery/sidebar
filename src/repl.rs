@@ -982,7 +982,10 @@ mod tests {
 
     #[test]
     fn no_color_passthrough() {
-        assert_eq!(render_markdown_inner("hello **world**", false), "hello **world**");
+        assert_eq!(
+            render_markdown_inner("hello **world**", false),
+            "hello **world**"
+        );
     }
 
     #[test]
@@ -1001,7 +1004,10 @@ mod tests {
     fn link_text_is_underlined_url_hidden() {
         let out = render_markdown_inner("see [docs](https://example.com) here", true);
         assert!(out.contains("\x1b[4mdocs\x1b[0m"), "got: {out:?}");
-        assert!(!out.contains("example.com"), "url should be hidden: {out:?}");
+        assert!(
+            !out.contains("example.com"),
+            "url should be hidden: {out:?}"
+        );
     }
 
     #[test]

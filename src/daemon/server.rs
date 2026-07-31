@@ -324,13 +324,16 @@ async fn fetch_inbox_with_long_poll(
     wait_ms: Option<u64>,
     mentions_only: bool,
 ) -> Result<ResponseData> {
+    // Subscribe before the initial fetch. If a message is committed between
+    // the fetch and the subscription, the old ordering could miss its event
+    // and make the caller wait for the full timeout despite an unread row.
+    let mut rx = daemon.events.subscribe();
     let messages = daemon.store.fetch_inbox(agent_name, mentions_only).await?;
     let wait = wait_ms.unwrap_or(0).min(MAX_INBOX_WAIT_MS);
     if !messages.is_empty() || wait == 0 {
         return Ok(ResponseData::Messages { messages });
     }
 
-    let mut rx = daemon.events.subscribe();
     let deadline = Instant::now() + Duration::from_millis(wait);
 
     loop {
@@ -344,7 +347,7 @@ async fn fetch_inbox_with_long_poll(
                 return Ok(ResponseData::Messages { messages: vec![] });
             }
             evt = rx.recv() => match evt {
-                Ok(Event::Message { from, .. }) if from != agent_name => {
+                Ok(Event::Message { .. }) | Err(broadcast::error::RecvError::Lagged(_)) => {
                     let msgs = daemon.store.fetch_inbox(agent_name, mentions_only).await?;
                     if !msgs.is_empty() {
                         return Ok(ResponseData::Messages { messages: msgs });
@@ -354,7 +357,7 @@ async fn fetch_inbox_with_long_poll(
                 Err(broadcast::error::RecvError::Closed) => {
                     return Ok(ResponseData::Messages { messages: vec![] });
                 }
-                // Own send, non-Message event, or lag — ignore and keep waiting.
+                // Non-Message events are not inbox deliveries.
                 _ => {}
             }
         }

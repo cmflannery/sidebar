@@ -251,48 +251,14 @@ impl Store {
             )?;
             let msg_id = tx.last_insert_rowid();
 
-            let mut recipient_ids: Vec<i64> = match &to {
-                Recipient::Agent(_) => vec![to_agent.expect("agent id set above")],
-                Recipient::Channel(_) => {
-                    let cid = to_channel.expect("channel id set above");
-                    let mut stmt = tx.prepare(
-                        "SELECT a.id FROM agents a
-                         JOIN memberships m ON m.agent_id = a.id
-                         WHERE m.channel_id = ?1 AND a.id != ?2",
-                    )?;
-                    stmt.query_map(params![cid, from_id], |r| r.get::<_, i64>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?
-                }
-                Recipient::Broadcast => {
-                    let mut stmt = tx.prepare("SELECT id FROM agents WHERE id != ?1")?;
-                    stmt.query_map(params![from_id], |r| r.get::<_, i64>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?
-                }
-            };
-
-            // Mention expansion: for channel and broadcast sends, treat
-            // `@name` tokens in the body as additional recipients. This
-            // lets agents @-ping someone who isn't subscribed to the
-            // channel. DM mentions are redundant (the target already gets
-            // it) so we skip there. The recipient agent is created on the
-            // fly if it doesn't exist yet — same affordance as `send @new`.
-            // Capped to MAX_MENTIONS_PER_MESSAGE to keep one runaway send
-            // from generating thousands of delivery rows. Mentions whose
-            // captured name fails `validate_name` are silently dropped —
-            // those couldn't be valid agents anyway, and we don't want
-            // mention syntax to bypass the dispatch-level name caps.
-            if !matches!(&to, Recipient::Agent(_)) {
-                for name in extract_mentions(&body)
-                    .into_iter()
-                    .filter(|n| validate_name(n).is_ok())
-                    .take(MAX_MENTIONS_PER_MESSAGE)
-                {
-                    let mid = ensure_agent_blocking(&tx, &name)?;
-                    if mid != from_id && !recipient_ids.contains(&mid) {
-                        recipient_ids.push(mid);
-                    }
-                }
-            }
+            let recipient_ids = delivery_recipient_ids(
+                &tx,
+                from_id,
+                &to,
+                to_agent,
+                to_channel,
+                &body,
+            )?;
 
             for aid in &recipient_ids {
                 tx.execute(
@@ -569,25 +535,14 @@ impl Store {
                 )?;
                 let msg_id = tx.last_insert_rowid();
 
-                // Compute recipient agents (same logic as send_message).
-                let recipient_ids: Vec<i64> = match &recipient {
-                    Recipient::Agent(_) => vec![to_agent.expect("agent id set above")],
-                    Recipient::Channel(_) => {
-                        let cid = to_channel.expect("channel id set above");
-                        let mut stmt = tx.prepare(
-                            "SELECT a.id FROM agents a
-                             JOIN memberships m ON m.agent_id = a.id
-                             WHERE m.channel_id = ?1 AND a.id != ?2",
-                        )?;
-                        stmt.query_map(params![cid, from_id], |r| r.get::<_, i64>(0))?
-                            .collect::<rusqlite::Result<Vec<_>>>()?
-                    }
-                    Recipient::Broadcast => {
-                        let mut stmt = tx.prepare("SELECT id FROM agents WHERE id != ?1")?;
-                        stmt.query_map(params![from_id], |r| r.get::<_, i64>(0))?
-                            .collect::<rusqlite::Result<Vec<_>>>()?
-                    }
-                };
+                let recipient_ids = delivery_recipient_ids(
+                    &tx,
+                    from_id,
+                    &recipient,
+                    to_agent,
+                    to_channel,
+                    &payload.body,
+                )?;
 
                 for aid in &recipient_ids {
                     tx.execute(
@@ -978,6 +933,58 @@ impl Store {
 }
 
 // ---- helpers (sync, run inside spawn_blocking) ----
+
+/// Resolve the delivery set for an immediate or scheduled message.
+///
+/// Keeping this in one place is important: scheduled messages must have the
+/// same channel/broadcast membership and `@mention` behavior as immediate
+/// sends. The caller has already validated and resolved the recipient IDs;
+/// this helper only computes the agent IDs that receive delivery rows.
+fn delivery_recipient_ids(
+    tx: &rusqlite::Transaction<'_>,
+    from_id: i64,
+    to: &Recipient,
+    to_agent: Option<i64>,
+    to_channel: Option<i64>,
+    body: &str,
+) -> Result<Vec<i64>> {
+    let mut recipient_ids: Vec<i64> = match to {
+        Recipient::Agent(_) => vec![to_agent.expect("agent id set above")],
+        Recipient::Channel(_) => {
+            let cid = to_channel.expect("channel id set above");
+            let mut stmt = tx.prepare(
+                "SELECT a.id FROM agents a
+                 JOIN memberships m ON m.agent_id = a.id
+                 WHERE m.channel_id = ?1 AND a.id != ?2",
+            )?;
+            stmt.query_map(params![cid, from_id], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        }
+        Recipient::Broadcast => {
+            let mut stmt = tx.prepare("SELECT id FROM agents WHERE id != ?1")?;
+            stmt.query_map(params![from_id], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        }
+    };
+
+    // Mention expansion applies to channel and broadcast messages. DMs
+    // already have an explicit recipient, so mentions inside them are not
+    // additional deliveries.
+    if !matches!(to, Recipient::Agent(_)) {
+        for name in extract_mentions(body)
+            .into_iter()
+            .filter(|n| validate_name(n).is_ok())
+            .take(MAX_MENTIONS_PER_MESSAGE)
+        {
+            let mid = ensure_agent_blocking(tx, &name)?;
+            if mid != from_id && !recipient_ids.contains(&mid) {
+                recipient_ids.push(mid);
+            }
+        }
+    }
+
+    Ok(recipient_ids)
+}
 
 fn ensure_agent_blocking(conn: &Connection, name: &str) -> Result<i64> {
     let now = Utc::now().to_rfc3339();
